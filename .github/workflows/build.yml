@@ -137,7 +137,7 @@ jobs:
   # -------------------------------------------------------------- PUBLISH
   publish:
     needs: [debug, release]
-    if: startsWith(github.ref, 'refs/tags/v') && needs.release.result == 'success'
+    if: needs.release.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
