@@ -1,8 +1,8 @@
 plugins { id("com.android.application") }
 
-// Keystore bersama untuk debug + release (diisi oleh GitHub Actions / gradle.properties lokal)
-val ksPath: String? = System.getenv("RESTEAM_KEYSTORE") ?: (findProperty("RESTEAM_KEYSTORE") as String?)
-fun secret(name: String): String? = System.getenv(name) ?: (findProperty(name) as String?)
+// Versi bisa di-override dari CI: -PversionName=1.2-beta -PversionCode=12
+val vName = (project.findProperty("versionName") as String?) ?: "1.2-beta"
+val vCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 3
 
 android {
     namespace = "com.udyneos.resteam"
@@ -18,20 +18,23 @@ android {
         externalNativeBuild { cmake { cppFlags += "-std=c++17" } }
     }
     signingConfigs {
-        if (ksPath != null) {
-            create("shared") {
-                storeFile = file(ksPath)
-                storePassword = secret("RESTEAM_KEYSTORE_PASSWORD")
-                keyAlias = secret("RESTEAM_KEY_ALIAS")
-                keyPassword = secret("RESTEAM_KEY_PASSWORD")
+        create("release") {
+            val path = System.getenv("KEYSTORE_PATH")
+            if (path != null && file(path).exists()) {
+                storeFile = file(path)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
             }
         }
     }
+
     buildTypes {
-        getByName("debug") { if (ksPath != null) signingConfig = signingConfigs.getByName("shared") }
-        getByName("release") {
+        release {
             isMinifyEnabled = false
-            if (ksPath != null) signingConfig = signingConfigs.getByName("shared")
+            // Lokal tanpa keystore -> fallback ke debug key; di CI selalu pakai keystore rilis
+            signingConfig = if (System.getenv("KEYSTORE_PATH") != null)
+                signingConfigs.getByName("release") else signingConfigs.getByName("debug")
         }
     }
     externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
