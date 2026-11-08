@@ -1,0 +1,183 @@
+name: Build Resteam
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths-ignore: ['**.md', 'art/**']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: Jenis build
+        type: choice
+        options: [both, debug, release]
+        default: both
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_TOOLS: 34.0.0
+
+jobs:
+  # ---------------------------------------------------------------- DEBUG
+  debug:
+    if: github.event_name != 'workflow_dispatch' || inputs.build_type != 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - uses: ./.github/actions/setup-android
+
+      - name: Tentukan versi
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then VER="${GITHUB_REF_NAME#v}"; else VER=$(grep '^appVersionName=' gradle.properties | cut -d= -f2); fi
+          IFS=. read -r MA MI PA <<< "${VER%%-*}"
+          CODE=$(( ${MA:-0}*10000 + ${MI:-0}*100 + ${PA:-0} ))
+          echo "name=$VER" >> "$GITHUB_OUTPUT"; echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "Versi: $VER (code $CODE)"
+
+      - name: Siapkan keystore (jika secret tersedia)
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KS_KEYPASS: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/resteam.jks"
+            {
+              echo "RESTEAM_KEYSTORE=$RUNNER_TEMP/resteam.jks"
+              echo "RESTEAM_KEYSTORE_PASSWORD=$KS_PASS"
+              echo "RESTEAM_KEY_ALIAS=$KS_ALIAS"
+              echo "RESTEAM_KEY_PASSWORD=${KS_KEYPASS:-$KS_PASS}"
+            } >> "$GITHUB_ENV"
+            echo "Debug ditandatangani dengan keystore bersama."
+          else
+            echo "::warning::Secret keystore tidak ada (PR dari fork?). Debug memakai debug key bawaan."
+          fi
+
+      - name: Build debug
+        run: gradle assembleDebug --no-daemon -PappVersionName=${{ steps.ver.outputs.name }} -PappVersionCode=${{ steps.ver.outputs.code }}
+
+      - name: Ganti nama + verifikasi tanda tangan
+        run: |
+          mkdir -p dist
+          APK="dist/Resteam-v${{ steps.ver.outputs.name }}-debug.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$APK"
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | head -n 4
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: resteam-debug
+          path: dist/*.apk
+          retention-days: 14
+
+  # -------------------------------------------------------------- RELEASE
+  release:
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.build_type != 'debug')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - uses: ./.github/actions/setup-android
+
+      - name: Tentukan versi
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then VER="${GITHUB_REF_NAME#v}"; else VER=$(grep '^appVersionName=' gradle.properties | cut -d= -f2); fi
+          IFS=. read -r MA MI PA <<< "${VER%%-*}"
+          CODE=$(( ${MA:-0}*10000 + ${MI:-0}*100 + ${PA:-0} ))
+          echo "name=$VER" >> "$GITHUB_OUTPUT"; echo "code=$CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Siapkan keystore (wajib untuk release)
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KS_KEYPASS: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -z "$KS_B64" ] || [ -z "$KS_PASS" ] || [ -z "$KS_ALIAS" ]; then
+            echo "::error::Secret KEYSTORE_BASE64 / KEYSTORE_PASSWORD / KEY_ALIAS belum diisi."; exit 1
+          fi
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/resteam.jks"
+          {
+            echo "RESTEAM_KEYSTORE=$RUNNER_TEMP/resteam.jks"
+            echo "RESTEAM_KEYSTORE_PASSWORD=$KS_PASS"
+            echo "RESTEAM_KEY_ALIAS=$KS_ALIAS"
+            echo "RESTEAM_KEY_PASSWORD=${KS_KEYPASS:-$KS_PASS}"
+          } >> "$GITHUB_ENV"
+
+      - name: Build release
+        run: gradle assembleRelease --no-daemon -PappVersionName=${{ steps.ver.outputs.name }} -PappVersionCode=${{ steps.ver.outputs.code }}
+
+      - name: Ganti nama + verifikasi tanda tangan
+        run: |
+          mkdir -p dist
+          APK="dist/Resteam-v${{ steps.ver.outputs.name }}-release.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$APK"
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | head -n 4
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: resteam-release
+          path: dist/*.apk
+          retention-days: 30
+
+  # -------------------------------------------------------------- PUBLISH
+  publish:
+    needs: [debug, release]
+    if: startsWith(github.ref, 'refs/tags/v') && needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Susun changelog + checksum
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          PREV=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          {
+            echo "## Resteam v$VER"
+            echo
+            echo "Rilis: $(date -u +%Y-%m-%d)"
+            echo
+            echo "### Perubahan"
+            awk -v v="## [$VER]" 'index($0, v) == 1 {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md
+            echo
+            echo "### Commit sejak ${PREV:-awal}"
+            git log ${PREV:+$PREV..}HEAD --pretty='- %s (%h)' --no-merges
+            echo
+            echo "### Berkas"
+            echo '```'
+            (cd dist && sha256sum *.apk | tee SHA256SUMS.txt)
+            echo '```'
+            echo
+            echo "Release dan debug ditandatangani dengan keystore yang sama, jadi bisa saling menimpa saat install."
+          } > notes.md
+          cat notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Resteam ${{ github.ref_name }}
+          body_path: notes.md
+          files: |
+            dist/*.apk
+            dist/SHA256SUMS.txt
+          prerelease: ${{ contains(github.ref_name, '-') }}
