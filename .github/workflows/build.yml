@@ -27,7 +27,6 @@ env:
 jobs:
   # ---------------------------------------------------------------- DEBUG
   debug:
-    if: github.event_name != 'workflow_dispatch' || inputs.build_type != 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -83,7 +82,6 @@ jobs:
 
   # -------------------------------------------------------------- RELEASE
   release:
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.build_type != 'debug')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -136,8 +134,6 @@ jobs:
 
   # -------------------------------------------------------------- PUBLISH
   publish:
-    needs: [debug, release]
-    if: needs.release.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
