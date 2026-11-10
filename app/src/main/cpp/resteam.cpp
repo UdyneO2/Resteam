@@ -543,7 +543,7 @@ static void sessionTick(const std::vector<string>& run, double dt) {
 
 // ---------------- Update dari GitHub Releases + rotasi aplikasi ----------------
 #ifndef GITHUB_REPO
-#define GITHUB_REPO "udyneos/resteam"
+#define GITHUB_REPO "udyneO2/Resteam"
 #endif
 struct Upd { int state = 0; string latest, notes, url, err; };   // 0 idle, 1 cek, 2 terbaru, 3 tersedia, 4 unduh, 5 pasang, 6 galat
 static Upd g_upd; static std::mutex g_umx;
