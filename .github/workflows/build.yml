@@ -63,6 +63,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: >
           gradle :app:assembleRelease --no-daemon
+          -PgithubRepo=${{ github.repository }}
           -PversionName=${{ steps.ver.outputs.name }}
           -PversionCode=${{ steps.ver.outputs.code }}
 

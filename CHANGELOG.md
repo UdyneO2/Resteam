@@ -2,6 +2,13 @@
 
 Format: satu bagian per versi dengan judul `## [x.y.z]`. Workflow rilis mengambil bagian yang cocok dengan tag `vX.Y.Z`.
 
+## [1.7]
+- Bubble menampilkan FPS live (bukan ikon), hanya bisa digeser dari bagian atas
+- Tombol SETTINGS di bubble: kembali ke aplikasi (langsung ke tab Settings)
+- Overlay statistik (FPS, CPU, GPU, ping) dihapus; statistik tetap ada di library, bubble, dan riwayat sesi
+- Update dari GitHub Releases di tab ABOUT: cek versi, unduh APK, pasang (senyap via Shizuku, fallback installer sistem), cek otomatis saat dibuka
+- Opsi rotasi aplikasi di Settings: auto landscape, landscape tetap, kunci rotasi saat ini
+
 ## [1.6]
 - Auto-switch mode: otomatis ke profil game saat game berjalan, kembali Balanced saat game ditutup
 - Resolusi layar per game (Native / 85% / 75% / 720P), dikembalikan otomatis setelah main

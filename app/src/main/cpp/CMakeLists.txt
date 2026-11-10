@@ -13,6 +13,9 @@ add_library(resteam SHARED resteam.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
 target_include_directories(resteam PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
-target_compile_definitions(resteam PRIVATE IMGUI_IMPL_OPENGL_ES3 "IMGUI_USER_CONFIG=\"imconfig_resteam.h\"")
+if(NOT GITHUB_REPO)
+    set(GITHUB_REPO "udyneos/resteam")
+endif()
+target_compile_definitions(resteam PRIVATE IMGUI_IMPL_OPENGL_ES3 "IMGUI_USER_CONFIG=\"imconfig_resteam.h\"" "GITHUB_REPO=\"${GITHUB_REPO}\"")
 target_link_libraries(resteam glue android log EGL GLESv3)
 target_link_options(resteam PRIVATE -u ANativeActivity_onCreate -Wl,-z,max-page-size=16384)

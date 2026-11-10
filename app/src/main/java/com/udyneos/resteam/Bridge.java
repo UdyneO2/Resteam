@@ -1,6 +1,7 @@
 package com.udyneos.resteam;
 import android.app.*;
 import android.content.*;
+import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.*;
@@ -15,6 +16,7 @@ import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.lang.reflect.Method;
+import androidx.core.content.FileProvider;
 import rikka.shizuku.Shizuku;
 
 /** Shim tipis: semua logika ada di C++. */
@@ -44,8 +46,8 @@ public class Bridge {
         Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + c.getPackageName()));
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); c.startActivity(i);
     }
-    public static void startOverlay(Context c, int id) { c.startService(new Intent(c, id == 0 ? OverlayService.class : SideService.class)); }
-    public static void stopOverlay(Context c, int id) { c.stopService(new Intent(c, id == 0 ? OverlayService.class : SideService.class)); }
+    public static void startOverlay(Context c, int id) { c.startService(new Intent(c, SideService.class)); }
+    public static void stopOverlay(Context c, int id) { c.stopService(new Intent(c, SideService.class)); }
     public static void enterPip(final Activity a) {
         a.runOnUiThread(() -> a.enterPictureInPictureMode(
             new PictureInPictureParams.Builder().setAspectRatio(new Rational(16, 9)).build()));
@@ -189,5 +191,65 @@ public class Bridge {
             }
         } catch (Throwable t) {}
         return lv + "|" + (tp / 10f) + "|" + (pl != 0 ? 1 : 0) + "|" + net;
+    }
+
+    // ---------------- update dari GitHub, rotasi, kembali ke app ----------------
+    static volatile int dlPct = 0;
+    public static int dlProgress() { return dlPct; }
+    public static String version(Context c) {
+        try { return c.getPackageManager().getPackageInfo(c.getPackageName(), 0).versionName; } catch (Throwable t) { return ""; }
+    }
+    public static String apkPath(Context c, String name) {
+        File dir = c.getExternalFilesDir(null); if (dir == null) dir = c.getCacheDir();
+        return new File(dir, name).getAbsolutePath();
+    }
+    public static boolean download(Context c, String url, String name) {
+        try {
+            File out = new File(apkPath(c, name));
+            HttpURLConnection h = (HttpURLConnection) new URL(url).openConnection();
+            h.setInstanceFollowRedirects(true); h.setConnectTimeout(8000); h.setReadTimeout(20000);
+            h.setRequestProperty("User-Agent", "Resteam");
+            if (h.getResponseCode() != 200) { dlPct = -1; return false; }
+            long len = h.getContentLengthLong(), tot = 0;
+            try (InputStream in = h.getInputStream(); FileOutputStream o = new FileOutputStream(out)) {
+                byte[] b = new byte[32768]; int n;
+                while ((n = in.read(b)) > 0) { o.write(b, 0, n); tot += n; if (len > 0) dlPct = (int) (tot * 100 / len); }
+            }
+            dlPct = 100; return true;
+        } catch (Throwable t) { dlPct = -1; return false; }
+    }
+    /** Fallback tanpa Shizuku: installer sistem lewat FileProvider. */
+    public static void installApk(Context c, String path) {
+        try {
+            Context app = c.getApplicationContext();
+            if (!app.getPackageManager().canRequestPackageInstalls()) {
+                Intent s = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + app.getPackageName()));
+                s.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); app.startActivity(s); return;
+            }
+            Uri u = FileProvider.getUriForFile(app, app.getPackageName() + ".fileprovider", new File(path));
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(u, "application/vnd.android.package-archive");
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            app.startActivity(i);
+        } catch (Throwable t) {}
+    }
+    /** mode 0 = auto landscape (kiri/kanan), 1 = kunci orientasi saat ini, 2 = landscape satu arah */
+    public static void setOrientation(final Activity a, final int mode) {
+        a.runOnUiThread(() -> {
+            try {
+                a.setRequestedOrientation(mode == 1 ? ActivityInfo.SCREEN_ORIENTATION_LOCKED
+                    : mode == 2 ? ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE : ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+            } catch (Throwable t) {}
+        });
+    }
+    /** Tombol Settings di bubble: bawa Resteam ke depan. */
+    public static void openApp(Context c) {
+        try {
+            Context app = c.getApplicationContext();
+            Intent i = app.getPackageManager().getLaunchIntentForPackage(app.getPackageName());
+            if (i == null) return;
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+            app.startActivity(i);
+        } catch (Throwable t) {}
     }
 }

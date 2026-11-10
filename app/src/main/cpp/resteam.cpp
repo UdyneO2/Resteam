@@ -1,4 +1,4 @@
-// Resteam v1.6 - semua logika di C++ (UI ImGui landscape, stats, floating bubble, fetch info game, Shizuku shell via JNI shim)
+// Resteam v1.7 - semua logika di C++ (UI ImGui landscape, stats, floating bubble, fetch info game, update GitHub, Shizuku shell via JNI shim)
 #include <android_native_app_glue.h>
 #include <android/native_window_jni.h>
 #include <jni.h>
@@ -31,7 +31,7 @@ using Clock = std::chrono::steady_clock;
 
 // ---------------- JNI ----------------
 static JavaVM* g_vm; static jclass g_bridge, g_host_cls; static jobject g_act;
-static jmethodID m_exec, m_state, m_req, m_canOv, m_askOv, m_start, m_stop, m_pip, m_imm, m_ins, m_sys, m_apps, m_icon, m_fetch, m_fimg, m_info, m_resize, m_move;
+static jmethodID m_exec, m_state, m_req, m_canOv, m_askOv, m_start, m_stop, m_pip, m_imm, m_ins, m_sys, m_apps, m_icon, m_fetch, m_fimg, m_info, m_ver, m_dl, m_dlp, m_apk, m_inst, m_orient, m_open, m_resize, m_move;
 
 struct Env {
     JNIEnv* e; bool att = false;
@@ -58,6 +58,13 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
     m_fetch = e->GetStaticMethodID(b, "fetch", "(Ljava/lang/String;)Ljava/lang/String;");
     m_fimg = e->GetStaticMethodID(b, "fetchImage", "(Ljava/lang/String;)[B");
     m_info = e->GetStaticMethodID(b, "info", "(Landroid/content/Context;Ljava/lang/String;)Ljava/lang/String;");
+    m_ver = e->GetStaticMethodID(b, "version", "(Landroid/content/Context;)Ljava/lang/String;");
+    m_dl = e->GetStaticMethodID(b, "download", "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)Z");
+    m_dlp = e->GetStaticMethodID(b, "dlProgress", "()I");
+    m_apk = e->GetStaticMethodID(b, "apkPath", "(Landroid/content/Context;Ljava/lang/String;)Ljava/lang/String;");
+    m_inst = e->GetStaticMethodID(b, "installApk", "(Landroid/content/Context;Ljava/lang/String;)V");
+    m_orient = e->GetStaticMethodID(b, "setOrientation", "(Landroid/app/Activity;I)V");
+    m_open = e->GetStaticMethodID(b, "openApp", "(Landroid/content/Context;)V");
     jclass o = e->FindClass("com/udyneos/resteam/HostService"); g_host_cls = (jclass)e->NewGlobalRef(o);
     m_resize = e->GetStaticMethodID(o, "resize", "(III)V");
     m_move = e->GetStaticMethodID(o, "moveBy", "(III)V");
@@ -93,7 +100,8 @@ struct App { string pkg, label; bool game; };
 struct Info { int state = 0; bool online = false; string title, desc, genre, dev, rating, count, ver; long long inst = 0, upd = 0, size = 0; };
 static std::atomic<float> g_fps{-1}, g_cpu{-1}, g_gpu{-1}, g_ping{-1}, g_temp{0};
 static std::atomic<int> g_sh{0}, g_mode{0}, g_tab{0}, g_bat{-1}, g_insL{0}, g_insR{0}, g_insT{0}, g_fpsSrc{0};
-static std::atomic<bool> g_run{true}, g_ovOn{false}, g_sideOn{false}, g_compact{false}, g_sideOpen{false}, g_chg{false}, g_showAll{false};
+static std::atomic<bool> g_run{true}, g_sideOn{false}, g_sideOpen{false}, g_chg{false}, g_showAll{false}, g_updAvail{false};
+static std::atomic<int> g_dlPct{0}, g_orient{0}; static string g_curVer;
 static std::mutex g_mx, g_imx; static std::vector<App> g_apps; static std::vector<string> g_pinned;
 static std::map<string, double> g_total, g_sess;                       // waktu bermain (detik), dilindungi g_mx
 static std::map<string, Info> g_info; static std::map<string, std::vector<unsigned char>> g_coverPx;  // dilindungi g_imx
@@ -212,9 +220,12 @@ static void sysInfo() {
     { std::lock_guard<std::mutex> l(g_mx); g_net = part[3].empty() ? "Offline" : part[3]; }
     int ins = v.e->CallStaticIntMethod(g_bridge, m_ins, g_act);
     g_insT = (ins >> 20) & 0x3FF; g_insL = (ins >> 10) & 0x3FF; g_insR = ins & 0x3FF;
+    g_dlPct = v.e->CallStaticIntMethod(g_bridge, m_dlp);
 }
 
 static void sessionTick(const std::vector<string>& run, double dt);
+static void checkUpdate();
+static bool autoUpdOn();
 
 static const char* STATS_HEAD = R"SH(echo ==C;head -1 /proc/stat;echo ==G;for f in /sys/class/kgsl/kgsl-3d0/gpu_busy_percentage /sys/kernel/gpu/gpu_busy /sys/devices/platform/*mali*/utilization /sys/class/misc/mali0/device/utilization /sys/kernel/ged/hal/gpu_utilization /sys/class/devfreq/*gpu*/load /sys/class/devfreq/*mali*/load;do [ -r "$f" ] && { head -1 "$f"; break; };done;echo ==B;head -1 /sys/class/kgsl/kgsl-3d0/gpubusy 2>/dev/null;echo ==S;for f in /sys/class/drm/sde-crtc-0/measured_fps /sys/class/graphics/fb0/measured_fps;do [ -r "$f" ] && { head -1 "$f"; break; };done;echo ==N;service call SurfaceFlinger 1013 2>/dev/null|head -1;)SH";
 
@@ -232,6 +243,7 @@ static void statsLoop() {
     while (g_run) {
         g_ping = pingMs(); int st = shState(); g_sh = st; sysInfo();
         if (!got) { got = true; refreshPkgs(); }
+        static bool updTried = false; if (!updTried && g_ping >= 0 && autoUpdOn()) { updTried = true; checkUpdate(); }
         auto now = Clock::now(); double dt = std::chrono::duration<double>(now - last).count(); last = now;
         if (st == 2) {
             string pkg, layer; { std::lock_guard<std::mutex> l(g_mx); pkg = g_target; layer = g_layer; }
@@ -251,16 +263,16 @@ static void statsLoop() {
 static string selPkg() { std::lock_guard<std::mutex> l(g_mx); return g_selPkg; }
 
 // Tweak mode performa (bisa diatur di Settings): 0 refresh max, 1 kill app latar, 2 matikan doze, 3 DND, 4 animasi 0.5x
-static std::atomic<bool> g_tw[6];
-static const char* TW_NAME[6] = {"Paksa refresh rate maksimal", "Bersihkan app latar (kill-all)", "Matikan Doze saat main", "Mode Jangan Ganggu (DND)", "Percepat animasi sistem (0.5x)", "Auto-switch mode + resolusi saat game berjalan"};
+static std::atomic<bool> g_tw[7];
+static const char* TW_NAME[7] = {"Paksa refresh rate maksimal", "Bersihkan app latar (kill-all)", "Matikan Doze saat main", "Mode Jangan Ganggu (DND)", "Percepat animasi sistem (0.5x)", "Auto-switch mode + resolusi saat game berjalan", "Cek update GitHub otomatis saat dibuka"};
 static void saveTweaks() {
     FILE* f = fopen((g_dir + "/tweaks.txt").c_str(), "w"); if (!f) return;
-    for (int i = 0; i < 6; i++) fputc(g_tw[i] ? '1' : '0', f); fputc('\n', f); fclose(f);
+    for (int i = 0; i < 7; i++) fputc(g_tw[i] ? '1' : '0', f); fputc('\n', f); fclose(f);
 }
 static void loadTweaks() {
-    g_tw[0] = true; g_tw[1] = true; g_tw[2] = true; g_tw[3] = false; g_tw[4] = false; g_tw[5] = true;
+    g_tw[0] = true; g_tw[1] = true; g_tw[2] = true; g_tw[3] = false; g_tw[4] = false; g_tw[5] = true; g_tw[6] = true;
     FILE* f = fopen((g_dir + "/tweaks.txt").c_str(), "r"); if (!f) return;
-    char b[16] = {0}; if (fgets(b, sizeof b, f)) for (int i = 0; i < 6 && b[i] && b[i] != '\n'; i++) g_tw[i] = b[i] == '1'; fclose(f);
+    char b[16] = {0}; if (fgets(b, sizeof b, f)) for (int i = 0; i < 7 && b[i] && b[i] != '\n'; i++) g_tw[i] = b[i] == '1'; fclose(f);
 }
 
 static void setMode(int m, const string& pkgO = "") {
@@ -510,47 +522,101 @@ static void sessionTick(const std::vector<string>& run, double dt) {
     if (on) sampleSession(dt);
 }
 
-// ---------------- Overlay: stats (id 0) + floating bubble (id 1) ----------------
-static const float BUB = 40, SIDE_W = 220, SIDE_H = 390, INFO = 78, MODEH = 40, ROW = 44;
+// ---------------- Update dari GitHub Releases + rotasi aplikasi ----------------
+#ifndef GITHUB_REPO
+#define GITHUB_REPO "udyneos/Resteam"
+#endif
+struct Upd { int state = 0; string latest, notes, url, err; };   // 0 idle, 1 cek, 2 terbaru, 3 tersedia, 4 unduh, 5 pasang, 6 galat
+static Upd g_upd; static std::mutex g_umx;
+
+static bool autoUpdOn() { return g_tw[6]; }
+static string curVersion() { Env v; return jstr(v.e, (jstring)v.e->CallStaticObjectMethod(g_bridge, m_ver, g_act)); }
+static std::vector<int> parseVer(string s) {
+    if (!s.empty() && (s[0] == 'v' || s[0] == 'V')) s.erase(0, 1);
+    size_t d = s.find('-'); if (d != string::npos) s = s.substr(0, d);
+    std::vector<int> v; size_t p = 0;
+    while (p <= s.size()) { size_t e = s.find('.', p); if (e == string::npos) e = s.size(); v.push_back(atoi(s.substr(p, e - p).c_str())); p = e + 1; }
+    while (v.size() < 3) v.push_back(0); return v;
+}
+static string jsonStr(const string& h, const string& key, size_t from = 0, size_t* endPos = nullptr) {
+    size_t p = h.find(key, from); if (p == string::npos) return ""; p += key.size();
+    while (p < h.size() && (h[p] == ' ' || h[p] == ':')) p++;
+    if (p >= h.size() || h[p] != '"') return ""; p++;
+    string o;
+    while (p < h.size() && h[p] != '"') {
+        if (h[p] == '\\' && p + 1 < h.size()) { char c = h[p + 1]; p += 2; if (c == 'n') o += '\n'; else if (c == 'r') {} else if (c == 't') o += ' '; else if (c == 'u') { p += 4; o += '?'; } else o += c; }
+        else o += h[p++];
+    }
+    if (endPos) *endPos = p; return o;
+}
+static void checkUpdate() {
+    { std::lock_guard<std::mutex> l(g_umx); if (g_upd.state == 1 || g_upd.state == 4 || g_upd.state == 5) return; g_upd.state = 1; g_upd.err.clear(); }
+    std::thread([] {
+        string js = callStr(m_fetch, string("https://api.github.com/repos/") + GITHUB_REPO + "/releases/latest", false);
+        Upd u; string tag = jsonStr(js, "\"tag_name\"");
+        if (js.empty() || tag.empty()) { u.state = 6; u.err = "Tidak bisa cek GitHub (offline, repo privat, atau belum ada release)."; }
+        else {
+            u.latest = tag; u.notes = cutUtf8(jsonStr(js, "\"body\""), 700);
+            size_t p = 0; string first;
+            while (true) {
+                size_t e = 0; string v = jsonStr(js, "\"browser_download_url\"", p, &e); if (v.empty()) break; p = e + 1;
+                if (v.size() > 4 && v.substr(v.size() - 4) == ".apk") { if (first.empty()) first = v; if (v.find("release") != string::npos) { u.url = v; break; } }
+            }
+            if (u.url.empty()) u.url = first;
+            if (parseVer(tag) > parseVer(g_curVer)) { u.state = u.url.empty() ? 6 : 3; if (u.state == 6) u.err = "Rilis baru ada tapi tanpa berkas APK."; } else u.state = 2;
+        }
+        g_updAvail = (u.state == 3);
+        std::lock_guard<std::mutex> l(g_umx); g_upd = u;
+    }).detach();
+}
+static void downloadUpdate() {
+    string url; { std::lock_guard<std::mutex> l(g_umx); if (g_upd.state != 3) return; url = g_upd.url; g_upd.state = 4; }
+    g_dlPct = 0;
+    std::thread([url] {
+        Env v; jstring a = v.e->NewStringUTF(url.c_str()), b = v.e->NewStringUTF("Resteam-update.apk");
+        jboolean ok = v.e->CallStaticBooleanMethod(g_bridge, m_dl, g_act, a, b); v.e->DeleteLocalRef(a); v.e->DeleteLocalRef(b);
+        if (!ok) { std::lock_guard<std::mutex> l(g_umx); g_upd.state = 6; g_upd.err = "Unduhan gagal."; return; }
+        string path = callStr(m_apk, "Resteam-update.apk", true);
+        { std::lock_guard<std::mutex> l(g_umx); g_upd.state = 5; }
+        bool done = false;
+        if (shState() == 2) { string o = sh("pm install -r -d '" + path + "'"); done = o.find("Success") != string::npos; }   // pasang senyap via Shizuku
+        if (!done) { jstring p = v.e->NewStringUTF(path.c_str()); v.e->CallStaticVoidMethod(g_bridge, m_inst, g_act, p); v.e->DeleteLocalRef(p); }   // fallback: installer sistem
+    }).detach();
+}
+
+static void saveOrient() { FILE* f = fopen((g_dir + "/orient.txt").c_str(), "w"); if (!f) return; fprintf(f, "%d\n", (int)g_orient); fclose(f); }
+static void loadOrient() { FILE* f = fopen((g_dir + "/orient.txt").c_str(), "r"); if (!f) return; int v = 0; if (fscanf(f, "%d", &v) == 1) g_orient = std::max(0, std::min(2, v)); fclose(f); }
+static void applyOrient() { Env v; v.e->CallStaticVoidMethod(g_bridge, m_orient, g_act, (jint)g_orient.load()); }
+
+// ---------------- Floating bubble ----------------
+static const float BUB = 40, SIDE_W = 220, SIDE_H = 390, INFO = 78, MODEH = 40, ROW = 44, SETBTN = 72;
 struct Host { std::thread th; std::atomic<bool> run{false}; float d = 1; };
 static Host g_host[2];
 
-static void ovUi(Ctx& x) {
-    ImDrawList* d = ImGui::GetBackgroundDrawList(); float W = x.w, H = x.h, f = x.f, r = f * 0.6f;
-    d->AddRectFilled({0, 0}, {W, H}, IM_COL32(23, 26, 33, 215), r);
-    d->AddRect({1, 1}, {W - 1, H - 1}, IM_COL32(102, 192, 244, 170), r, 0, 2.f);
-    ImFont* ft = ImGui::GetFont(); float fps = g_fps, cpu = g_cpu, gpu = g_gpu, pg = g_ping; char b[64];
-    if (g_compact) {
-        snprintf(b, sizeof b, "%s fps  %sms", fv(fps, "").c_str(), fv(pg, "").c_str());
-        d->AddText(ft, f, {f * 0.7f, (H - f) / 2}, IM_COL32(164, 208, 7, 255), b);
-        return;
-    }
-    double ses = 0, tot = 0; { std::lock_guard<std::mutex> l(g_mx); getPlayNL(g_target, ses, tot); }
-    d->AddText(ft, f * 2.1f, {f * 0.8f, f * 0.4f}, IM_COL32(164, 208, 7, 255), fv(fps, "").c_str());
-    d->AddText(ft, f, {W - f * 3.2f, f * 1.2f}, IM_COL32(143, 152, 160, 255), "FPS");
-    snprintf(b, sizeof b, "CPU %s", fv(cpu, "%").c_str()); d->AddText(ft, f, {f * 0.8f, f * 3.2f}, IM_COL32(102, 192, 244, 255), b);
-    snprintf(b, sizeof b, "GPU %s", fv(gpu, "%").c_str()); d->AddText(ft, f, {W * 0.5f, f * 3.2f}, IM_COL32(102, 192, 244, 255), b);
-    snprintf(b, sizeof b, "PING %s ms", fv(pg, "").c_str()); d->AddText(ft, f, {f * 0.8f, f * 4.6f}, colPing(pg), b);
-    snprintf(b, sizeof b, "PLAY %s", ses > 0 ? fmtHMS(ses).c_str() : "--:--:--"); d->AddText(ft, f, {f * 0.8f, f * 6.0f}, IM_COL32(255, 255, 255, 255), b);
-}
-
-// Ikon bubble: petir (warna mengikuti mode: biru=balanced, oranye=performance, hijau=battery)
-static void drawBubble(ImDrawList* d, ImVec2 c, float R, float pulse, int mode) {
+// Bubble: menampilkan FPS live (bukan ikon); cincin mengikuti mode (biru=balanced, oranye=performance, hijau=battery)
+static ImU32 colFps(float v) { return v < 0 ? IM_COL32(143, 152, 160, 255) : v >= 50 ? IM_COL32(164, 208, 7, 255) : v >= 30 ? IM_COL32(255, 200, 40, 255) : IM_COL32(230, 70, 60, 255); }
+static void drawBubble(ImDrawList* d, ImVec2 c, float R, float pulse, int mode, const string& txt) {
     ImU32 bc = mode == 1 ? IM_COL32(255, 170, 30, 255) : mode == 2 ? IM_COL32(164, 208, 7, 255) : IM_COL32(102, 192, 244, 255);
     d->AddCircleFilled(c, R, IM_COL32(23, 26, 33, 240), 40);
     d->AddCircle(c, R - 1.f, (bc & 0x00FFFFFF) | ((ImU32)(170 + 85 * pulse) << 24), 40, 2.f);
-    float s = R * 0.55f; auto P = [&](float x, float y) { return ImVec2(c.x + x * s, c.y + y * s); };
-    d->AddTriangleFilled(P(0.25f, -1.f), P(-0.45f, 0.12f), P(0.10f, 0.12f), bc);
-    d->AddTriangleFilled(P(-0.10f, -0.12f), P(0.45f, -0.12f), P(-0.25f, 1.f), bc);
+    ImFont* ft = ImGui::GetFont(); float sz = R * (txt.size() >= 3 ? 0.8f : 1.05f); ImVec2 ts = ft->CalcTextSizeA(sz, FLT_MAX, 0, txt.c_str());
+    d->AddText(ft, sz, {c.x - ts.x * 0.5f, c.y - ts.y * 0.5f}, colFps(g_fps), txt.c_str());
+}
+static void openApp() {   // tombol Settings di bubble: kembali ke aplikasi, tab Settings
+    g_tab = 2; Env v; v.e->CallStaticVoidMethod(g_bridge, m_open, g_act);
 }
 
 static void sideUi(Ctx& x) {
     ImDrawList* d = ImGui::GetBackgroundDrawList(); float W = x.w, H = x.h, f = x.f, dn = g_host[1].d;
     ImFont* ft = ImGui::GetFont(); float bub = BUB * dn, y0 = (BUB + 4) * dn, inf = INFO * dn, mh = MODEH * dn, rh = ROW * dn, fs = f * 0.82f;
     float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 3.f); int mode = g_mode;
-    if (!g_sideOpen) { drawBubble(d, {W * 0.5f, H * 0.5f}, std::min(W, H) * 0.5f - 2.f, pulse, mode); return; }
-    drawBubble(d, {bub * 0.5f, bub * 0.5f}, bub * 0.5f - 2.f, pulse, mode);
-    d->AddText(ft, f * 1.1f, {bub + f * 0.4f, bub * 0.5f - f * 0.55f}, IM_COL32(255, 255, 255, 255), "RESTEAM");
+    string fpsT = fv(g_fps, "");
+    if (!g_sideOpen) { drawBubble(d, {W * 0.5f, H * 0.5f}, std::min(W, H) * 0.5f - 2.f, pulse, mode, fpsT); return; }
+    drawBubble(d, {bub * 0.5f, bub * 0.5f}, bub * 0.5f - 2.f, pulse, mode, fpsT);
+    d->AddText(ft, f * 1.0f, {bub + f * 0.4f, bub * 0.5f - f * 0.5f}, IM_COL32(143, 152, 160, 255), "RESTEAM");
+    { float sbw = SETBTN * dn; ImVec2 b0(W - sbw - f * 0.4f, bub * 0.15f), b1(W - f * 0.4f, bub * 0.85f);   // tombol Settings -> kembali ke aplikasi
+      d->AddRectFilled(b0, b1, IM_COL32(26, 159, 255, 255), f * 0.5f);
+      float tw = ft->CalcTextSizeA(fs, FLT_MAX, 0, "SETTINGS").x; d->AddText(ft, fs, {b0.x + (sbw - tw) * 0.5f, (b0.y + b1.y) * 0.5f - fs * 0.5f}, IM_COL32(255, 255, 255, 255), "SETTINGS"); }
     // panel turun ke bawah dari bubble
     d->AddRectFilled({0, y0}, {W, H}, IM_COL32(23, 26, 33, 238), f * 0.8f);
     d->AddRect({1, y0}, {W - 1, H - 1}, IM_COL32(102, 192, 244, 170), f * 0.8f, 0, 2.f);
@@ -585,9 +651,9 @@ static void sideUi(Ctx& x) {
 
 static void ovLoop(int id, ANativeWindow* win, float dens) {
     Ctx x;
-    if (openCtx(x, win, (id == 0 ? 11.f : 12.f) * dens)) {
+    if (openCtx(x, win, 12.f * dens)) {
         eglSwapInterval(x.d, 0);
-        while (g_host[id].run) { render(x, id == 0 ? ovUi : sideUi, ImVec4(0, 0, 0, 0)); std::this_thread::sleep_for(std::chrono::milliseconds(33)); }
+        while (g_host[id].run) { render(x, sideUi, ImVec4(0, 0, 0, 0)); std::this_thread::sleep_for(std::chrono::milliseconds(33)); }
     }
     closeCtx(x); ANativeWindow_release(win);
 }
@@ -595,40 +661,33 @@ extern "C" JNIEXPORT void JNICALL Java_com_udyneos_resteam_HostService_nativeSur
     Host& h = g_host[id]; h.run = false; if (h.th.joinable()) h.th.join();
     if (!s) return;
     ANativeWindow* w = ANativeWindow_fromSurface(e, s); h.d = d;
-    if (id == 0) g_compact = false; else { g_sideOpen = false; g_sideScroll = 0; }
+    g_sideOpen = false; g_sideScroll = 0;
     h.run = true; h.th = std::thread(ovLoop, (int)id, w, (float)d);
 }
 static void resizeHost(JNIEnv* e, int id, float wdp, float hdp) {
     float d = g_host[id].d; e->CallStaticVoidMethod(g_host_cls, m_resize, (jint)id, (jint)(wdp * d), (jint)(hdp * d));
 }
-extern "C" JNIEXPORT void JNICALL Java_com_udyneos_resteam_HostService_nativeTouch(JNIEnv* e, jclass, jint id, jint a, jfloat rx, jfloat ry, jfloat x, jfloat y) {
-    static float lx[2], ly[2], sx[2], sy[2], lyl; static bool drag[2]; static int zone; float dn = g_host[id].d;
-    if (id == 0) {  // stats: tap = compact, drag = pindah
-        if (a == 0) { drag[0] = false; lx[0] = sx[0] = rx; ly[0] = sy[0] = ry; }
-        else if (a == 2) {
-            if (!drag[0] && hypotf(rx - sx[0], ry - sy[0]) > 10 * dn) drag[0] = true;
-            if (drag[0]) { e->CallStaticVoidMethod(g_host_cls, m_move, 0, (jint)(rx - lx[0]), (jint)(ry - ly[0])); lx[0] = rx; ly[0] = ry; }
-        } else if (a == 1 && !drag[0]) { bool c = !g_compact; g_compact = c; resizeHost(e, 0, c ? 108 : 150, c ? 30 : 86); }
-        return;
-    }
-    // bubble: zone 0 = bubble tertutup, 1 = baris bubble, 3 = info, 4 = switch mode, 2 = list.
-    // drag di zone 0/1/3/4 = pindah bebas; tap zone 0 = buka; zone 1 = tutup; zone 4 = ganti mode; drag zone 2 = scroll; tap app = PIP
-    float y0 = (BUB + 4) * dn, inf = INFO * dn, mh = MODEH * dn, listTop = y0 + inf + mh, rh = ROW * dn;
-    if (a == 0) { drag[1] = false; sx[1] = lx[1] = rx; sy[1] = ly[1] = ry; lyl = y; zone = !g_sideOpen ? 0 : (y < y0 ? 1 : (y < y0 + inf ? 3 : (y < listTop ? 4 : 2))); }
+extern "C" JNIEXPORT void JNICALL Java_com_udyneos_resteam_HostService_nativeTouch(JNIEnv* e, jclass, jint, jint a, jfloat rx, jfloat ry, jfloat x, jfloat y) {
+    static float lx, ly, sx, sy, lyl; static bool drag; static int zone; float dn = g_host[1].d;
+    // zone: 0 bubble tertutup, 1 baris atas, 5 tombol Settings, 3 info, 4 switch mode, 2 list.
+    // Drag pindah HANYA di zone 0/1 (bagian atas). tap: 0 = buka, 1 = tutup, 5 = ke aplikasi, 4 = ganti mode, 2 = jalankan app (PIP); drag zone 2 = scroll
+    float y0 = (BUB + 4) * dn, inf = INFO * dn, mh = MODEH * dn, listTop = y0 + inf + mh, rh = ROW * dn, W = SIDE_W * dn;
+    if (a == 0) { drag = false; sx = lx = rx; sy = ly = ry; lyl = y; zone = !g_sideOpen ? 0 : (y < y0 ? (x > W - (SETBTN + 4) * dn ? 5 : 1) : (y < y0 + inf ? 3 : (y < listTop ? 4 : 2))); }
     else if (a == 2) {
-        if (!drag[1] && hypotf(rx - sx[1], ry - sy[1]) > 8 * dn) drag[1] = true;
-        if (drag[1]) {
-            if (zone != 2) { e->CallStaticVoidMethod(g_host_cls, m_move, 1, (jint)(rx - lx[1]), (jint)(ry - ly[1])); lx[1] = rx; ly[1] = ry; }
-            else {
+        if (!drag && hypotf(rx - sx, ry - sy) > 8 * dn) drag = true;
+        if (drag) {
+            if (zone == 0 || zone == 1) { e->CallStaticVoidMethod(g_host_cls, m_move, 1, (jint)(rx - lx), (jint)(ry - ly)); lx = rx; ly = ry; }
+            else if (zone == 2) {
                 size_t n; { std::lock_guard<std::mutex> l(g_mx); n = g_pinned.size(); }
                 float mx = std::max(0.f, n * rh - (SIDE_H * dn - listTop));
                 g_sideScroll = std::min(mx, std::max(0.f, g_sideScroll - (y - lyl))); lyl = y;
             }
         }
-    } else if (a == 1 && !drag[1]) {
+    } else if (a == 1 && !drag) {
         if (zone == 0) { g_sideOpen = true; resizeHost(e, 1, SIDE_W, SIDE_H); return; }
         if (zone == 1) { g_sideOpen = false; resizeHost(e, 1, BUB, BUB); return; }
-        if (zone == 4) { int i = (int)(x / (SIDE_W * dn / 3.f)); setMode(std::max(0, std::min(2, i))); return; }
+        if (zone == 5) { openApp(); g_sideOpen = false; resizeHost(e, 1, BUB, BUB); return; }
+        if (zone == 4) { int i = (int)(x / (W / 3.f)); setMode(std::max(0, std::min(2, i))); return; }
         if (zone != 2) return;
         int idx = (int)((y + g_sideScroll - listTop) / rh); string p;
         { std::lock_guard<std::mutex> l(g_mx); if (idx >= 0 && idx < (int)g_pinned.size()) p = g_pinned[idx]; }
@@ -770,7 +829,7 @@ static void mainUi(Ctx& x) {
       auto rt = [&](const string& s, ImU32 c) { float w = ImGui::CalcTextSize(s.c_str()).x; rx -= w; bg->AddText({rx, ty}, c, s.c_str()); rx -= f * 1.2f; };
       rt(clockText(), IM_COL32(255, 255, 255, 255)); rt(batText(), colBat(g_bat, g_chg));
       string net; { std::lock_guard<std::mutex> l(g_mx); net = g_net; } rt(net, IM_COL32(102, 192, 244, 255)); }
-    char b[96]; snprintf(b, sizeof b, "Resteam v1.6  |  ping %s ms", fv(g_ping, "").c_str());
+    char b[96]; snprintf(b, sizeof b, "Resteam v1.7  |  ping %s ms", fv(g_ping, "").c_str());
     bg->AddText({L + f, H - bot * 0.5f - f * 0.5f}, IM_COL32(143, 152, 160, 255), b);
     const char* chip = st == 2 ? "SHIZUKU: ON" : st == 1 ? "SHIZUKU: IZIN" : "SHIZUKU: OFF";
     bg->AddText({W - Rr - f - ImGui::CalcTextSize(chip).x, H - bot * 0.5f - f * 0.5f}, st == 2 ? IM_COL32(164, 208, 7, 255) : IM_COL32(255, 200, 40, 255), chip);
@@ -781,7 +840,7 @@ static void mainUi(Ctx& x) {
     ImGui::Begin("tabs", 0, fl | ImGuiWindowFlags_NoScrollbar);
     ImGui::SetCursorPos({0, (f * 2.6f - f * 2) * 0.5f});
     static const char* TN[4] = {"LIBRARY", "HISTORY", "SETTINGS", "ABOUT"};
-    for (int i = 0; i < 4; i++) { if (i) ImGui::SameLine(); if (Btn(TN[i], tab == i ? C(26, 159, 255) : C(46, 60, 76), ImVec2(f * 6.8f, f * 2))) g_tab = i; }
+    for (int i = 0; i < 4; i++) { if (i) ImGui::SameLine(); if (Btn((i == 3 && g_updAvail) ? "ABOUT (!)" : TN[i], tab == i ? C(26, 159, 255) : C(46, 60, 76), ImVec2(f * 6.8f, f * 2))) g_tab = i; }
     ImGui::End();
 
     if (tab == 1) {  // ---- HISTORY: riwayat sesi ----
@@ -834,17 +893,33 @@ static void mainUi(Ctx& x) {
         ImGui::SetCursorScreenPos({p.x + is + f, p.y});
         ImGui::BeginGroup();
         ImGui::SetWindowFontScale(2.2f); ImGui::TextUnformatted("Resteam"); ImGui::SetWindowFontScale(1.f);
-        ImGui::TextColored(C(102, 192, 244), "Game Space untuk Android  |  v1.6");
+        ImGui::TextColored(C(102, 192, 244), "Game Space untuk Android  |  v1.7");
         ImGui::TextColored(C(143, 152, 160), "Package  com.udyneos.resteam");
         ImGui::TextColored(C(143, 152, 160), "Dibangun dengan C++17 (NDK), Dear ImGui, dan Shizuku");
         ImGui::EndGroup();
         ImGui::SetCursorScreenPos({p.x, p.y + is + f});
+        { Upd u; { std::lock_guard<std::mutex> l(g_umx); u = g_upd; }
+          ImGui::TextColored(C(102, 192, 244), "PEMBARUAN  (GitHub: %s)", GITHUB_REPO);
+          ImGui::Text("Terpasang  %s", g_curVer.c_str());
+          if (u.state == 0) ImGui::TextColored(C(143, 152, 160), "Belum dicek.");
+          if (u.state == 1) ImGui::TextColored(C(255, 200, 40), "Memeriksa rilis terbaru...");
+          if (u.state == 2) ImGui::TextColored(C(164, 208, 7), "Sudah versi terbaru (rilis %s).", u.latest.c_str());
+          if (u.state == 3) { ImGui::TextColored(C(164, 208, 7), "Tersedia versi baru: %s", u.latest.c_str()); if (!u.notes.empty()) ImGui::TextWrapped("%s", u.notes.c_str()); }
+          if (u.state == 4) { float pc = std::max(0.f, std::min(100.f, (float)g_dlPct)); char pb[16]; snprintf(pb, sizeof pb, "%.0f%%", pc); ImGui::ProgressBar(pc / 100.f, ImVec2(-1, f * 1.6f), pb); }
+          if (u.state == 5) ImGui::TextColored(C(255, 200, 40), "Memasang... aplikasi akan restart.");
+          if (u.state == 6) ImGui::TextColored(C(230, 70, 60), "%s", u.err.c_str());
+          ImGui::BeginDisabled(u.state == 1 || u.state == 4 || u.state == 5);
+          if (Btn("CEK UPDATE", C(61, 77, 92), ImVec2(f * 9, f * 2.2f))) checkUpdate();
+          ImGui::EndDisabled();
+          if (u.state == 3) { ImGui::SameLine(); if (Btn("UNDUH & PASANG", C(91, 163, 43), ImVec2(f * 11, f * 2.2f))) downloadUpdate(); }
+          ImGui::Dummy({0, f * 0.3f}); }
         ImGui::TextColored(C(102, 192, 244), "FITUR");
         ImGui::BulletText("Library game vertikal + info game online (Google Play) dan waktu bermain");
         ImGui::BulletText("Mode performa (Balanced / Performance / Battery) + tweak yang bisa diatur");
         ImGui::BulletText("Auto-switch mode dan resolusi layar per game, riwayat sesi dengan grafik FPS");
-        ImGui::BulletText("Overlay statistik live (FPS, CPU, GPU, ping) dan floating bubble dengan switch mode + PIP");
+        ImGui::BulletText("Floating bubble: FPS live, switch mode, tombol Settings, dan daftar app untuk PIP; update dari GitHub");
         ImGui::Dummy({0, f * 0.3f}); ImGui::TextColored(C(102, 192, 244), "CATATAN VERSI TERBARU");
+        ImGui::BulletText("v1.7  Bubble tampil FPS + tombol Settings, update GitHub, kunci rotasi, overlay statistik dihapus");
         ImGui::BulletText("v1.6  Auto-switch + resolusi per game, riwayat sesi, tab About, build GitHub Actions");
         ImGui::BulletText("v1.5  Switch performa di bubble, library vertikal, tweak performa lebih banyak");
         ImGui::BulletText("v1.4  Fetch info game, waktu bermain, bubble melayang, metode FPS berlapis");
@@ -860,8 +935,14 @@ static void mainUi(Ctx& x) {
         ImGui::Begin("set", 0, fl);
         ImGui::SetWindowFontScale(1.4f); ImGui::TextUnformatted("TWEAK & OTOMATISASI"); ImGui::SetWindowFontScale(1.f);
         ImGui::TextColored(C(143, 152, 160), "Dijalankan lewat Shizuku saat PERFORMANCE dipilih, dibalik saat BALANCED.");
-        for (int i = 0; i < 6; i++) { bool v = g_tw[i]; if (ImGui::Checkbox(TW_NAME[i], &v)) { g_tw[i] = v; saveTweaks(); } }
+        for (int i = 0; i < 7; i++) { bool v = g_tw[i]; if (ImGui::Checkbox(TW_NAME[i], &v)) { g_tw[i] = v; saveTweaks(); } }
         ImGui::TextColored(C(143, 152, 160), "Selalu aktif: fixed/sustained performance, game mode performance, matikan battery saver.");
+        ImGui::Separator();
+        ImGui::SetWindowFontScale(1.4f); ImGui::TextUnformatted("ROTASI APLIKASI"); ImGui::SetWindowFontScale(1.f);
+        { static const char* ON[3] = {"AUTO LANDSCAPE", "LANDSCAPE TETAP", "KUNCI SAAT INI"};
+          float bwo = (ImGui::GetContentRegionAvail().x - 2 * ImGui::GetStyle().ItemSpacing.x) / 3;
+          for (int i = 0; i < 3; i++) { if (i) ImGui::SameLine(); if (Btn(ON[i], g_orient == i ? C(26, 159, 255) : C(61, 77, 92), ImVec2(bwo, f * 2.2f))) { g_orient = i; saveOrient(); applyOrient(); } }
+          ImGui::TextColored(C(143, 152, 160), "Auto: ikut sensor (kiri/kanan). Tetap: satu arah. Kunci: mengunci orientasi layar saat ini."); }
         ImGui::Separator();
         ImGui::SetWindowFontScale(1.4f); ImGui::TextUnformatted("SIDEBAR APPS"); ImGui::SetWindowFontScale(1.f);
         ImGui::TextColored(C(143, 152, 160), "Centang app yang muncul di bubble. Tap app di bubble = jalan dalam PIP.");
@@ -922,11 +1003,10 @@ static void mainUi(Ctx& x) {
     ImGui::BeginDisabled(st != 2);
     for (int i = 0; i < 3; i++) { if (i) ImGui::SameLine(); if (Btn(mn[i], g_mode == i ? C(26, 159, 255) : C(61, 77, 92), ImVec2(bw, f * 2.2f))) setMode(i); }
     ImGui::EndDisabled();
-    if (Btn(g_ovOn ? "OVERLAY: ON" : "OVERLAY: OFF", g_ovOn ? C(91, 163, 43) : C(61, 77, 92), ImVec2(bw, f * 2.2f))) toggleHost(0, g_ovOn);
+    float bw2 = (av - sp) / 2;
+    if (Btn(g_sideOn ? "BUBBLE: ON" : "BUBBLE: OFF", g_sideOn ? C(91, 163, 43) : C(61, 77, 92), ImVec2(bw2, f * 2.2f))) toggleHost(1, g_sideOn);
     ImGui::SameLine();
-    if (Btn(g_sideOn ? "BUBBLE: ON" : "BUBBLE: OFF", g_sideOn ? C(91, 163, 43) : C(61, 77, 92), ImVec2(bw, f * 2.2f))) toggleHost(1, g_sideOn);
-    ImGui::SameLine();
-    if (Btn("MINIMIZE", C(61, 77, 92), ImVec2(bw, f * 2.2f))) { Env v; v.e->CallStaticVoidMethod(g_bridge, m_pip, g_act); }
+    if (Btn("MINIMIZE", C(61, 77, 92), ImVec2(bw2, f * 2.2f))) { Env v; v.e->CallStaticVoidMethod(g_bridge, m_pip, g_act); }
     ImGui::Dummy({0, f * 0.4f});
     ImVec2 p = ImGui::GetCursorScreenPos(); float gap = f * 0.6f, cw2 = (ImGui::GetContentRegionAvail().x - gap) / 2, ch = f * 4.6f;
     ImDrawList* d = ImGui::GetWindowDrawList();
@@ -978,7 +1058,7 @@ void android_main(android_app* app) {
     app->onAppCmd = onCmd; app->onInputEvent = onInput;
     { Env v; g_act = v.e->NewGlobalRef(app->activity->clazz); }
     g_dir = app->activity->internalDataPath ? app->activity->internalDataPath : "/data/local/tmp";
-    loadList("pinned.txt", g_pinned); loadPlay(); loadTweaks(); loadProf(); loadHist();
+    loadList("pinned.txt", g_pinned); loadPlay(); loadTweaks(); loadProf(); loadHist(); loadOrient(); g_curVer = curVersion(); applyOrient();
     g_run = true; std::thread(statsLoop).detach();
     while (!app->destroyRequested) {
         int ev; android_poll_source* src;
