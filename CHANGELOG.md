@@ -2,6 +2,11 @@
 
 Format: satu bagian per versi dengan judul `## [x.y.z]`. Workflow rilis mengambil bagian yang cocok dengan tag `vX.Y.Z`.
 
+## [1.8]
+- Panel bubble didesain ulang ala game panel: kolom statistik (CPU, GPU, FPS, ping, waktu main), baris app PIP berikon, grid shortcut, tombol RESTEAM dan TUTUP
+- Shortcut: Mode (BAL/PERF/BAT), Lock FPS (kunci refresh rate: auto atau rate yang didukung layar), DND, Rotasi, Settings
+- Status Lock FPS dan DND disinkronkan dari sistem saat panel dibuka
+
 ## [1.7]
 - Bubble menampilkan FPS live (bukan ikon), hanya bisa digeser dari bagian atas
 - Tombol SETTINGS di bubble: kembali ke aplikasi (langsung ke tab Settings)

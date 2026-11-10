@@ -1,7 +1,7 @@
 plugins { id("com.android.application") }
 
 // Versi bisa di-override dari CI: -PversionName=1.2-beta -PversionCode=12
-val vName = (project.findProperty("versionName") as String?) ?: "1.7"
+val vName = (project.findProperty("versionName") as String?) ?: "1.8"
 val vCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 3
 
 android {
@@ -12,8 +12,8 @@ android {
         applicationId = "com.udyneos.resteam"
         minSdk = 29
         targetSdk = 34
-        versionCode = (findProperty("appVersionCode") as String?)?.toInt() ?: 10700
-        versionName = (findProperty("appVersionName") as String?) ?: "1.7"
+        versionCode = (findProperty("appVersionCode") as String?)?.toInt() ?: 10800
+        versionName = (findProperty("appVersionName") as String?) ?: "1.8"
         ndk { abiFilters += "arm64-v8a" }
         externalNativeBuild { cmake { cppFlags += "-std=c++17" } }
     }

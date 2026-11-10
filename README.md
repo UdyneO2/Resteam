@@ -1,6 +1,6 @@
 <p align="center"><img src="art/icon.png" width="96" alt="Resteam"></p>
 
-# Resteam v1.7
+# Resteam v1.8
 
 Game Space untuk Android (`com.udyneos.resteam`). Logika dan UI ditulis di C++17 (NDK) dengan Dear ImGui; Java hanya shim tipis (load library, Surface overlay, API Shizuku/HTTP). Orientasi landscape.
 
@@ -9,7 +9,11 @@ Game Space untuk Android (`com.udyneos.resteam`). Logika dan UI ditulis di C++17
 - **Mode performa**: Balanced / Performance / Battery lewat Shizuku, plus tweak yang bisa diatur (refresh rate maksimal, bersihkan app latar, matikan Doze, DND, animasi 0.5x)
 - **Auto-switch + resolusi per game**: tiap game punya profil (mode dan resolusi: Native / 85% / 75% / 720P). Saat game berjalan profil dipasang otomatis, saat ditutup kembali ke Balanced dan resolusi normal
 - **Riwayat sesi** (tab HISTORY): durasi, FPS rata-rata/minimum, GPU, CPU, suhu maks, baterai, grafik FPS dan suhu
-- **Floating bubble**: kecil, menampilkan FPS live (cincin berwarna mengikuti mode), hanya bisa digeser dari bagian atas. Tap untuk membuka panel turun ke bawah: tombol **SETTINGS** (kembali ke aplikasi), info baterai/jaringan, switch BAL/PERF/BAT, dan daftar app untuk dijalankan dalam PIP
+- **Floating bubble**: kecil, menampilkan FPS live (cincin berwarna mengikuti mode), hanya bisa digeser dari bagian atas. Tap untuk membuka panel ala game panel:
+  - kolom kiri: CPU, GPU, FPS, ping, waktu main
+  - baris app berikon (dari daftar bubble di Settings): tap = jalan dalam PIP
+  - shortcut: **Mode** (BAL/PERF/BAT), **Lock FPS** (auto, lalu tiap refresh rate yang didukung layar), **DND**, **Rotasi** (auto / kunci / landscape tetap), **Settings**
+  - tombol **RESTEAM** (buka aplikasi) dan **TUTUP**
 - **Update dari GitHub** (tab ABOUT): cek rilis terbaru, unduh APK, pasang (senyap via Shizuku, fallback installer sistem). Cek otomatis saat dibuka bisa dimatikan di Settings
 - **Rotasi aplikasi** (Settings): auto landscape, landscape tetap, atau kunci rotasi saat ini
 - **Immersive penuh** tanpa status bar, navigasi, dan batas notch; jam, baterai, dan jaringan tampil di top bar

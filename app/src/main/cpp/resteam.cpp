@@ -1,4 +1,4 @@
-// Resteam v1.7 - semua logika di C++ (UI ImGui landscape, stats, floating bubble, fetch info game, update GitHub, Shizuku shell via JNI shim)
+// Resteam v1.8 - semua logika di C++ (UI ImGui landscape, stats, floating bubble, fetch info game, update GitHub, Shizuku shell via JNI shim)
 #include <android_native_app_glue.h>
 #include <android/native_window_jni.h>
 #include <jni.h>
@@ -101,7 +101,7 @@ struct Info { int state = 0; bool online = false; string title, desc, genre, dev
 static std::atomic<float> g_fps{-1}, g_cpu{-1}, g_gpu{-1}, g_ping{-1}, g_temp{0};
 static std::atomic<int> g_sh{0}, g_mode{0}, g_tab{0}, g_bat{-1}, g_insL{0}, g_insR{0}, g_insT{0}, g_fpsSrc{0};
 static std::atomic<bool> g_run{true}, g_sideOn{false}, g_sideOpen{false}, g_chg{false}, g_showAll{false}, g_updAvail{false};
-static std::atomic<int> g_dlPct{0}, g_orient{0}; static string g_curVer;
+static std::atomic<int> g_dlPct{0}, g_orient{0}, g_lockHz{0}; static std::atomic<bool> g_dnd{false}; static std::vector<int> g_rates; static string g_curVer;
 static std::mutex g_mx, g_imx; static std::vector<App> g_apps; static std::vector<string> g_pinned;
 static std::map<string, double> g_total, g_sess;                       // waktu bermain (detik), dilindungi g_mx
 static std::map<string, Info> g_info; static std::map<string, std::vector<unsigned char>> g_coverPx;  // dilindungi g_imx
@@ -223,6 +223,24 @@ static void sysInfo() {
     g_dlPct = v.e->CallStaticIntMethod(g_bridge, m_dlp);
 }
 
+// Sinkron status shortcut bubble (Lock FPS = min_refresh_rate, DND = zen_mode) dan daftar refresh rate layar
+static void syncToggles() {
+    string o = sh("settings get system min_refresh_rate;settings get global zen_mode"); size_t e = o.find('\n');
+    string a = o.substr(0, e), b = e == string::npos ? "" : o.substr(e + 1); trim(a); trim(b);
+    g_lockHz = (!a.empty() && isdigit((unsigned char)a[0])) ? atoi(a.c_str()) : 0;
+    g_dnd = (!b.empty() && isdigit((unsigned char)b[0])) ? atoi(b.c_str()) != 0 : false;
+}
+static void detectRates() {
+    string o = sh("dumpsys display | grep -o 'fps=[0-9]*'"); std::vector<int> v; size_t p = 0;
+    while (p < o.size()) {
+        size_t e = o.find('\n', p); if (e == string::npos) e = o.size();
+        string l = o.substr(p, e - p); p = e + 1; if (l.rfind("fps=", 0) != 0) continue;
+        int r = atoi(l.c_str() + 4); if (r >= 30 && r <= 240 && std::find(v.begin(), v.end(), r) == v.end()) v.push_back(r);
+    }
+    std::sort(v.begin(), v.end()); if (v.empty()) v = {60, 90, 120};
+    std::lock_guard<std::mutex> l(g_mx); g_rates = v;
+}
+
 static void sessionTick(const std::vector<string>& run, double dt);
 static void checkUpdate();
 static bool autoUpdOn();
@@ -246,6 +264,7 @@ static void statsLoop() {
         static bool updTried = false; if (!updTried && g_ping >= 0 && autoUpdOn()) { updTried = true; checkUpdate(); }
         auto now = Clock::now(); double dt = std::chrono::duration<double>(now - last).count(); last = now;
         if (st == 2) {
+            { static int tk = 0; static bool rd = false; if (tk++ % 10 == 0) syncToggles(); if (!rd) { rd = true; detectRates(); } }
             string pkg, layer; { std::lock_guard<std::mutex> l(g_mx); pkg = g_target; layer = g_layer; }
             if (!pkg.empty() && layer.empty()) {
                 string l = sh("dumpsys SurfaceFlinger --list 2>/dev/null | grep '" + pkg + "' | awk '/SurfaceView/{print;f=1;exit} {a=$0} END{if(!f)print a}'");
@@ -524,7 +543,7 @@ static void sessionTick(const std::vector<string>& run, double dt) {
 
 // ---------------- Update dari GitHub Releases + rotasi aplikasi ----------------
 #ifndef GITHUB_REPO
-#define GITHUB_REPO "udyneos/Resteam"
+#define GITHUB_REPO "udyneos/resteam"
 #endif
 struct Upd { int state = 0; string latest, notes, url, err; };   // 0 idle, 1 cek, 2 terbaru, 3 tersedia, 4 unduh, 5 pasang, 6 galat
 static Upd g_upd; static std::mutex g_umx;
@@ -588,113 +607,6 @@ static void saveOrient() { FILE* f = fopen((g_dir + "/orient.txt").c_str(), "w")
 static void loadOrient() { FILE* f = fopen((g_dir + "/orient.txt").c_str(), "r"); if (!f) return; int v = 0; if (fscanf(f, "%d", &v) == 1) g_orient = std::max(0, std::min(2, v)); fclose(f); }
 static void applyOrient() { Env v; v.e->CallStaticVoidMethod(g_bridge, m_orient, g_act, (jint)g_orient.load()); }
 
-// ---------------- Floating bubble ----------------
-static const float BUB = 40, SIDE_W = 220, SIDE_H = 390, INFO = 78, MODEH = 40, ROW = 44, SETBTN = 72;
-struct Host { std::thread th; std::atomic<bool> run{false}; float d = 1; };
-static Host g_host[2];
-
-// Bubble: menampilkan FPS live (bukan ikon); cincin mengikuti mode (biru=balanced, oranye=performance, hijau=battery)
-static ImU32 colFps(float v) { return v < 0 ? IM_COL32(143, 152, 160, 255) : v >= 50 ? IM_COL32(164, 208, 7, 255) : v >= 30 ? IM_COL32(255, 200, 40, 255) : IM_COL32(230, 70, 60, 255); }
-static void drawBubble(ImDrawList* d, ImVec2 c, float R, float pulse, int mode, const string& txt) {
-    ImU32 bc = mode == 1 ? IM_COL32(255, 170, 30, 255) : mode == 2 ? IM_COL32(164, 208, 7, 255) : IM_COL32(102, 192, 244, 255);
-    d->AddCircleFilled(c, R, IM_COL32(23, 26, 33, 240), 40);
-    d->AddCircle(c, R - 1.f, (bc & 0x00FFFFFF) | ((ImU32)(170 + 85 * pulse) << 24), 40, 2.f);
-    ImFont* ft = ImGui::GetFont(); float sz = R * (txt.size() >= 3 ? 0.8f : 1.05f); ImVec2 ts = ft->CalcTextSizeA(sz, FLT_MAX, 0, txt.c_str());
-    d->AddText(ft, sz, {c.x - ts.x * 0.5f, c.y - ts.y * 0.5f}, colFps(g_fps), txt.c_str());
-}
-static void openApp() {   // tombol Settings di bubble: kembali ke aplikasi, tab Settings
-    g_tab = 2; Env v; v.e->CallStaticVoidMethod(g_bridge, m_open, g_act);
-}
-
-static void sideUi(Ctx& x) {
-    ImDrawList* d = ImGui::GetBackgroundDrawList(); float W = x.w, H = x.h, f = x.f, dn = g_host[1].d;
-    ImFont* ft = ImGui::GetFont(); float bub = BUB * dn, y0 = (BUB + 4) * dn, inf = INFO * dn, mh = MODEH * dn, rh = ROW * dn, fs = f * 0.82f;
-    float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 3.f); int mode = g_mode;
-    string fpsT = fv(g_fps, "");
-    if (!g_sideOpen) { drawBubble(d, {W * 0.5f, H * 0.5f}, std::min(W, H) * 0.5f - 2.f, pulse, mode, fpsT); return; }
-    drawBubble(d, {bub * 0.5f, bub * 0.5f}, bub * 0.5f - 2.f, pulse, mode, fpsT);
-    d->AddText(ft, f * 1.0f, {bub + f * 0.4f, bub * 0.5f - f * 0.5f}, IM_COL32(143, 152, 160, 255), "RESTEAM");
-    { float sbw = SETBTN * dn; ImVec2 b0(W - sbw - f * 0.4f, bub * 0.15f), b1(W - f * 0.4f, bub * 0.85f);   // tombol Settings -> kembali ke aplikasi
-      d->AddRectFilled(b0, b1, IM_COL32(26, 159, 255, 255), f * 0.5f);
-      float tw = ft->CalcTextSizeA(fs, FLT_MAX, 0, "SETTINGS").x; d->AddText(ft, fs, {b0.x + (sbw - tw) * 0.5f, (b0.y + b1.y) * 0.5f - fs * 0.5f}, IM_COL32(255, 255, 255, 255), "SETTINGS"); }
-    // panel turun ke bawah dari bubble
-    d->AddRectFilled({0, y0}, {W, H}, IM_COL32(23, 26, 33, 238), f * 0.8f);
-    d->AddRect({1, y0}, {W - 1, H - 1}, IM_COL32(102, 192, 244, 170), f * 0.8f, 0, 2.f);
-    string bt = batText(), ck = clockText(), net; double ses = 0, tot = 0;
-    { std::lock_guard<std::mutex> l(g_mx); net = g_net; getPlayNL(g_target, ses, tot); }
-    d->AddText(ft, fs, {f * 0.7f, y0 + f * 0.25f}, colBat(g_bat, g_chg), bt.c_str());
-    d->AddText(ft, fs, {W - f * 0.7f - ft->CalcTextSizeA(fs, FLT_MAX, 0, ck.c_str()).x, y0 + f * 0.25f}, IM_COL32(255, 255, 255, 255), ck.c_str());
-    d->AddText(ft, fs, {f * 0.7f, y0 + f * 1.25f}, IM_COL32(102, 192, 244, 255), net.c_str());
-    char b[64]; snprintf(b, sizeof b, "FPS %s  GPU %s  %sms", fv(g_fps, "").c_str(), fv(g_gpu, "%").c_str(), fv(g_ping, "").c_str());
-    d->AddText(ft, fs, {f * 0.7f, y0 + f * 2.25f}, IM_COL32(164, 208, 7, 255), b);
-    snprintf(b, sizeof b, "PLAY %s", ses > 0 ? fmtHMS(ses).c_str() : "--:--:--"); d->AddText(ft, fs, {f * 0.7f, y0 + f * 3.25f}, IM_COL32(255, 255, 255, 255), b);
-    // switch mode performa
-    float my = y0 + inf; d->AddLine({0, my}, {W, my}, IM_COL32(61, 77, 92, 255));
-    static const char* mnm[] = {"BAL", "PERF", "BAT"}; float segW = W / 3.f;
-    for (int i = 0; i < 3; i++) {
-        float x0 = i * segW; ImU32 col = mode == i ? (i == 1 ? IM_COL32(255, 150, 20, 255) : i == 2 ? IM_COL32(110, 150, 10, 255) : IM_COL32(26, 159, 255, 255)) : IM_COL32(61, 77, 92, 255);
-        d->AddRectFilled({x0 + f * 0.4f, my + mh * 0.14f}, {x0 + segW - f * 0.4f, my + mh * 0.86f}, col, f * 0.4f);
-        float tw = ft->CalcTextSizeA(fs, FLT_MAX, 0, mnm[i]).x; d->AddText(ft, fs, {x0 + (segW - tw) * 0.5f, my + (mh - fs) * 0.5f}, IM_COL32(255, 255, 255, 255), mnm[i]);
-    }
-    float ly = my + mh; d->AddLine({0, ly}, {W, ly}, IM_COL32(61, 77, 92, 255));
-    std::lock_guard<std::mutex> l(g_mx);
-    if (g_pinned.empty()) { d->AddText(ft, f * 0.9f, {f, ly + f}, IM_COL32(143, 152, 160, 255), "Pilih app di Settings"); return; }
-    d->PushClipRect({0, ly}, {W, H}, true); float sc = g_sideScroll;
-    for (size_t i = 0; i < g_pinned.size(); i++) {
-        float y = ly + i * rh - sc; if (y + rh < ly || y > H) continue;
-        d->AddRectFilled({f * 0.5f, y + rh * 0.08f}, {W - f * 0.5f, y + rh * 0.92f}, IM_COL32(61, 77, 92, 255), f * 0.3f);
-        string nm = labelOfNL(g_pinned[i]); ImVec4 clip(f, y, W - f * 0.8f, y + rh);
-        d->AddText(ft, f, {f, y + rh * 0.5f - f * 0.5f}, IM_COL32(235, 240, 245, 255), nm.c_str(), nullptr, 0.0f, &clip);
-    }
-    d->PopClipRect();
-}
-
-static void ovLoop(int id, ANativeWindow* win, float dens) {
-    Ctx x;
-    if (openCtx(x, win, 12.f * dens)) {
-        eglSwapInterval(x.d, 0);
-        while (g_host[id].run) { render(x, sideUi, ImVec4(0, 0, 0, 0)); std::this_thread::sleep_for(std::chrono::milliseconds(33)); }
-    }
-    closeCtx(x); ANativeWindow_release(win);
-}
-extern "C" JNIEXPORT void JNICALL Java_com_udyneos_resteam_HostService_nativeSurface(JNIEnv* e, jclass, jint id, jobject s, jfloat d) {
-    Host& h = g_host[id]; h.run = false; if (h.th.joinable()) h.th.join();
-    if (!s) return;
-    ANativeWindow* w = ANativeWindow_fromSurface(e, s); h.d = d;
-    g_sideOpen = false; g_sideScroll = 0;
-    h.run = true; h.th = std::thread(ovLoop, (int)id, w, (float)d);
-}
-static void resizeHost(JNIEnv* e, int id, float wdp, float hdp) {
-    float d = g_host[id].d; e->CallStaticVoidMethod(g_host_cls, m_resize, (jint)id, (jint)(wdp * d), (jint)(hdp * d));
-}
-extern "C" JNIEXPORT void JNICALL Java_com_udyneos_resteam_HostService_nativeTouch(JNIEnv* e, jclass, jint, jint a, jfloat rx, jfloat ry, jfloat x, jfloat y) {
-    static float lx, ly, sx, sy, lyl; static bool drag; static int zone; float dn = g_host[1].d;
-    // zone: 0 bubble tertutup, 1 baris atas, 5 tombol Settings, 3 info, 4 switch mode, 2 list.
-    // Drag pindah HANYA di zone 0/1 (bagian atas). tap: 0 = buka, 1 = tutup, 5 = ke aplikasi, 4 = ganti mode, 2 = jalankan app (PIP); drag zone 2 = scroll
-    float y0 = (BUB + 4) * dn, inf = INFO * dn, mh = MODEH * dn, listTop = y0 + inf + mh, rh = ROW * dn, W = SIDE_W * dn;
-    if (a == 0) { drag = false; sx = lx = rx; sy = ly = ry; lyl = y; zone = !g_sideOpen ? 0 : (y < y0 ? (x > W - (SETBTN + 4) * dn ? 5 : 1) : (y < y0 + inf ? 3 : (y < listTop ? 4 : 2))); }
-    else if (a == 2) {
-        if (!drag && hypotf(rx - sx, ry - sy) > 8 * dn) drag = true;
-        if (drag) {
-            if (zone == 0 || zone == 1) { e->CallStaticVoidMethod(g_host_cls, m_move, 1, (jint)(rx - lx), (jint)(ry - ly)); lx = rx; ly = ry; }
-            else if (zone == 2) {
-                size_t n; { std::lock_guard<std::mutex> l(g_mx); n = g_pinned.size(); }
-                float mx = std::max(0.f, n * rh - (SIDE_H * dn - listTop));
-                g_sideScroll = std::min(mx, std::max(0.f, g_sideScroll - (y - lyl))); lyl = y;
-            }
-        }
-    } else if (a == 1 && !drag) {
-        if (zone == 0) { g_sideOpen = true; resizeHost(e, 1, SIDE_W, SIDE_H); return; }
-        if (zone == 1) { g_sideOpen = false; resizeHost(e, 1, BUB, BUB); return; }
-        if (zone == 5) { openApp(); g_sideOpen = false; resizeHost(e, 1, BUB, BUB); return; }
-        if (zone == 4) { int i = (int)(x / (W / 3.f)); setMode(std::max(0, std::min(2, i))); return; }
-        if (zone != 2) return;
-        int idx = (int)((y + g_sideScroll - listTop) / rh); string p;
-        { std::lock_guard<std::mutex> l(g_mx); if (idx >= 0 && idx < (int)g_pinned.size()) p = g_pinned[idx]; }
-        if (!p.empty()) { launchPkg(p, true); g_sideOpen = false; resizeHost(e, 1, BUB, BUB); }
-    }
-}
-
 // ---------------- Tekstur: ikon + cover ----------------
 struct Icon { GLuint tex = 0; float r = 0.25f, g = 0.35f, b = 0.5f, w = 1, h = 1; bool tried = false; };
 static std::map<string, Icon> g_icons, g_covers; static int g_iconBudget = 0;
@@ -725,6 +637,159 @@ static void uploadCovers() {
         if (w > 0 && h > 0 && b.size() >= (size_t)8 + w * h * 4) { Icon& c = g_covers[kv.first]; c.tex = makeTex(b.data() + 8, w, h); c.w = (float)w; c.h = (float)h; c.tried = true; }
     }
     g_coverPx.clear();
+}
+
+// ---------------- Floating bubble ----------------
+static const float BUB = 40, SIDE_W = 310, SIDE_H = 270;
+struct Host { std::thread th; std::atomic<bool> run{false}; float d = 1; };
+static Host g_host[2];
+
+// Bubble: menampilkan FPS live (bukan ikon); cincin mengikuti mode (biru=balanced, oranye=performance, hijau=battery)
+static ImU32 colFps(float v) { return v < 0 ? IM_COL32(143, 152, 160, 255) : v >= 50 ? IM_COL32(164, 208, 7, 255) : v >= 30 ? IM_COL32(255, 200, 40, 255) : IM_COL32(230, 70, 60, 255); }
+static void drawBubble(ImDrawList* d, ImVec2 c, float R, float pulse, int mode, const string& txt) {
+    ImU32 bc = mode == 1 ? IM_COL32(255, 170, 30, 255) : mode == 2 ? IM_COL32(164, 208, 7, 255) : IM_COL32(102, 192, 244, 255);
+    d->AddCircleFilled(c, R, IM_COL32(23, 26, 33, 240), 40);
+    d->AddCircle(c, R - 1.f, (bc & 0x00FFFFFF) | ((ImU32)(170 + 85 * pulse) << 24), 40, 2.f);
+    ImFont* ft = ImGui::GetFont(); float sz = R * (txt.size() >= 3 ? 0.8f : 1.05f); ImVec2 ts = ft->CalcTextSizeA(sz, FLT_MAX, 0, txt.c_str());
+    d->AddText(ft, sz, {c.x - ts.x * 0.5f, c.y - ts.y * 0.5f}, colFps(g_fps), txt.c_str());
+}
+static void openApp(int tab) {   // dari bubble: kembali ke aplikasi (tab 0 library, 2 settings)
+    g_tab = tab; Env v; v.e->CallStaticVoidMethod(g_bridge, m_open, g_act);
+}
+
+// ---- Panel bubble ala game panel: kolom statistik kiri, baris app, grid shortcut, tombol bawah ----
+static std::map<string, Icon> g_ovIcons; static int g_ovBudget = 0;   // cache ikon milik thread overlay (konteks GL terpisah)
+static Icon& ovIcon(const string& pkg) { Icon& ic = g_ovIcons[pkg]; if (!ic.tried && g_ovBudget > 0) { g_ovBudget--; ic.tried = true; loadIcon(pkg, ic); } return ic; }
+struct Rect { float x0 = 0, y0 = 0, x1 = 0, y1 = 0; bool has(float x, float y) const { return x >= x0 && x <= x1 && y >= y0 && y <= y1; } };
+struct Lay { float W, H, y0, statX, statY, statH, sepX; Rect app[5], tile[6], btnApp, btnClose; };
+static Lay layout(float dn) {
+    Lay L; L.W = SIDE_W * dn; L.H = SIDE_H * dn; L.y0 = (BUB + 4) * dn;
+    L.statX = 10 * dn; L.statY = L.y0 + 10 * dn; L.statH = 40 * dn; L.sepX = 72 * dn;
+    float rx0 = 78 * dn, rw = 224 * dn, ay = L.y0 + 8 * dn, sl = rw / 5, ic = 38 * dn;
+    for (int i = 0; i < 5; i++) { float cx = rx0 + i * sl + sl * 0.5f; L.app[i] = Rect{cx - ic / 2, ay, cx + ic / 2, ay + ic}; }
+    float gy = L.y0 + 56 * dn, cw = rw / 3, ch = 62 * dn;
+    for (int i = 0; i < 6; i++) { int c = i % 3, r = i / 3; L.tile[i] = Rect{rx0 + c * cw, gy + r * ch, rx0 + (c + 1) * cw, gy + (r + 1) * ch}; }
+    float by = L.H - 38 * dn; L.btnApp = Rect{rx0, by, rx0 + 108 * dn, by + 30 * dn}; L.btnClose = Rect{rx0 + 116 * dn, by, rx0 + rw, by + 30 * dn};
+    return L;
+}
+// kind: 0 teks di lingkaran, 1 gear, 2 DND
+static void tileDraw(ImDrawList* d, ImFont* ft, const Rect& r, float dn, float fs, int kind, const char* label, const char* txt, bool on, ImU32 onCol) {
+    float cx = (r.x0 + r.x1) * 0.5f, cy = r.y0 + 21 * dn, R = 18 * dn; ImU32 white = IM_COL32(255, 255, 255, 255);
+    d->AddCircleFilled({cx, cy}, R, on ? onCol : IM_COL32(44, 48, 74, 255), 32);
+    d->AddCircle({cx, cy}, R, on ? onCol : IM_COL32(110, 120, 160, 255), 32, 1.5f);
+    if (kind == 1) {
+        d->AddCircle({cx, cy}, R * 0.42f, white, 20, 2.f); d->AddCircleFilled({cx, cy}, R * 0.14f, white);
+        for (int i = 0; i < 8; i++) { float a = i * 0.7853982f; d->AddLine({cx + cosf(a) * R * 0.5f, cy + sinf(a) * R * 0.5f}, {cx + cosf(a) * R * 0.74f, cy + sinf(a) * R * 0.74f}, white, 3.f); }
+    } else if (kind == 2) {
+        d->AddCircle({cx, cy}, R * 0.58f, white, 24, 2.2f); d->AddLine({cx - R * 0.32f, cy}, {cx + R * 0.32f, cy}, white, 3.f);
+    } else {
+        float sz = R * (strlen(txt) >= 4 ? 0.56f : 0.8f); ImVec2 ts = ft->CalcTextSizeA(sz, FLT_MAX, 0, txt);
+        d->AddText(ft, sz, {cx - ts.x * 0.5f, cy - ts.y * 0.5f}, white, txt);
+    }
+    float lsz = fs * 0.95f; ImVec2 ls = ft->CalcTextSizeA(lsz, FLT_MAX, 0, label);
+    d->AddText(ft, lsz, {cx - ls.x * 0.5f, r.y0 + 44 * dn}, IM_COL32(190, 196, 220, 255), label);
+}
+static void sideUi(Ctx& x) {
+    ImDrawList* d = ImGui::GetBackgroundDrawList(); float W = x.w, H = x.h, f = x.f, dn = g_host[1].d; ImFont* ft = ImGui::GetFont(); float fs = f * 0.82f;
+    float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 3.f); int mode = g_mode; string fpsT = fv(g_fps, ""); float bub = BUB * dn;
+    if (!g_sideOpen) { drawBubble(d, {W * 0.5f, H * 0.5f}, std::min(W, H) * 0.5f - 2.f, pulse, mode, fpsT); return; }
+    g_ovBudget = 1; Lay L = layout(dn); ImU32 white = IM_COL32(255, 255, 255, 255), grey = IM_COL32(143, 152, 160, 255), blue = IM_COL32(102, 192, 244, 255);
+    drawBubble(d, {bub * 0.5f, bub * 0.5f}, bub * 0.5f - 2.f, pulse, mode, fpsT);
+    d->AddText(ft, f * 1.0f, {bub + f * 0.4f, bub * 0.5f - f * 0.5f}, grey, "GAME SPACE");
+    string top = batText() + "   " + clockText(); float tw = ft->CalcTextSizeA(fs, FLT_MAX, 0, top.c_str()).x;
+    d->AddText(ft, fs, {W - tw - f * 0.5f, bub * 0.5f - fs * 0.5f}, colBat(g_bat, g_chg), top.c_str());
+    d->AddRectFilled({0, L.y0}, {W, H}, IM_COL32(18, 20, 36, 244), f * 0.9f);
+    d->AddRect({1, L.y0}, {W - 1, H - 1}, IM_COL32(86, 110, 255, 200), f * 0.9f, 0, 2.f);
+    d->AddLine({f, L.y0 + 1}, {W * 0.42f, L.y0 + 1}, IM_COL32(255, 60, 90, 255), 3.f);
+    // kolom statistik kiri
+    double ses = 0, tot = 0; std::vector<string> pins; { std::lock_guard<std::mutex> l(g_mx); getPlayNL(g_target, ses, tot); pins = g_pinned; }
+    struct Row { const char* l; string v; ImU32 c; };
+    Row rows[5] = {{"CPU", fv(g_cpu, "%"), blue}, {"GPU", fv(g_gpu, "%"), blue}, {"FPS", fv(g_fps, ""), colFps(g_fps)}, {"PING", fv(g_ping, " ms"), colPing(g_ping)}, {"MAIN", ses > 0 ? fmtHMS(ses) : string("--:--:--"), white}};
+    for (int i = 0; i < 5; i++) { float y = L.statY + i * L.statH; d->AddText(ft, fs * 0.9f, {L.statX, y}, grey, rows[i].l); d->AddText(ft, fs * 1.15f, {L.statX, y + fs * 1.05f}, rows[i].c, rows[i].v.c_str()); }
+    d->AddLine({L.sepX, L.y0 + 8 * dn}, {L.sepX, H - 8 * dn}, IM_COL32(60, 66, 100, 255), 1.5f);
+    // baris app (ikon bulat)
+    if (pins.empty()) d->AddText(ft, fs, {L.app[0].x0, L.app[0].y0 + 10 * dn}, grey, "Pilih app di Settings");
+    for (int i = 0; i < 5 && i < (int)pins.size(); i++) {
+        const Rect& r = L.app[i]; ImVec2 c((r.x0 + r.x1) * 0.5f, (r.y0 + r.y1) * 0.5f); float R = (r.x1 - r.x0) * 0.5f; Icon& ic = ovIcon(pins[i]);
+        d->AddCircleFilled(c, R, IM_COL32(44, 48, 74, 255), 28);
+        if (ic.tex) d->AddImageRounded((ImTextureID)(intptr_t)ic.tex, {r.x0, r.y0}, {r.x1, r.y1}, {0, 0}, {1, 1}, white, R);
+        else { string sn = shortName(pins[i]); char c1[2] = {sn.empty() ? '?' : (char)toupper((unsigned char)sn[0]), 0}; d->AddText(ft, R, {c.x - R * 0.3f, c.y - R * 0.5f}, white, c1); }
+    }
+    d->AddLine({L.app[0].x0, L.y0 + 52 * dn}, {L.app[4].x1, L.y0 + 52 * dn}, IM_COL32(60, 66, 100, 255), 1.5f);
+    // grid shortcut: Mode, Lock FPS, DND, Rotasi, Settings
+    char b1[16]; ImU32 mc = mode == 1 ? IM_COL32(255, 140, 20, 255) : mode == 2 ? IM_COL32(110, 170, 20, 255) : IM_COL32(26, 159, 255, 255);
+    tileDraw(d, ft, L.tile[0], dn, fs, 0, "Mode", mode == 1 ? "PERF" : mode == 2 ? "BAT" : "BAL", true, mc);
+    int hz = g_lockHz; snprintf(b1, sizeof b1, "%dHz", hz);
+    tileDraw(d, ft, L.tile[1], dn, fs, 0, "Lock FPS", hz > 0 ? b1 : "AUTO", hz > 0, IM_COL32(26, 159, 255, 255));
+    tileDraw(d, ft, L.tile[2], dn, fs, 2, "DND", "", g_dnd, IM_COL32(26, 159, 255, 255));
+    int ori = g_orient; tileDraw(d, ft, L.tile[3], dn, fs, 0, "Rotasi", ori == 1 ? "LOCK" : ori == 2 ? "LAND" : "AUTO", ori != 0, IM_COL32(26, 159, 255, 255));
+    tileDraw(d, ft, L.tile[4], dn, fs, 1, "Settings", "", false, 0);
+    // tombol bawah
+    const Rect& ba = L.btnApp; const Rect& bc = L.btnClose;
+    d->AddRectFilled({ba.x0, ba.y0}, {ba.x1, ba.y1}, IM_COL32(26, 159, 255, 255), f * 0.5f);
+    d->AddRectFilled({bc.x0, bc.y0}, {bc.x1, bc.y1}, IM_COL32(44, 48, 74, 255), f * 0.5f);
+    float t1 = ft->CalcTextSizeA(fs, FLT_MAX, 0, "RESTEAM").x, t2 = ft->CalcTextSizeA(fs, FLT_MAX, 0, "TUTUP").x;
+    d->AddText(ft, fs, {(ba.x0 + ba.x1) * 0.5f - t1 * 0.5f, (ba.y0 + ba.y1) * 0.5f - fs * 0.5f}, white, "RESTEAM");
+    d->AddText(ft, fs, {(bc.x0 + bc.x1) * 0.5f - t2 * 0.5f, (bc.y0 + bc.y1) * 0.5f - fs * 0.5f}, white, "TUTUP");
+}
+
+static void ovLoop(int id, ANativeWindow* win, float dens) {
+    Ctx x;
+    if (openCtx(x, win, 12.f * dens)) {
+        g_ovIcons.clear();
+        eglSwapInterval(x.d, 0);
+        while (g_host[id].run) { render(x, sideUi, ImVec4(0, 0, 0, 0)); std::this_thread::sleep_for(std::chrono::milliseconds(33)); }
+    }
+    closeCtx(x); ANativeWindow_release(win);
+}
+extern "C" JNIEXPORT void JNICALL Java_com_udyneos_resteam_HostService_nativeSurface(JNIEnv* e, jclass, jint id, jobject s, jfloat d) {
+    Host& h = g_host[id]; h.run = false; if (h.th.joinable()) h.th.join();
+    if (!s) return;
+    ANativeWindow* w = ANativeWindow_fromSurface(e, s); h.d = d;
+    g_sideOpen = false; g_sideScroll = 0;
+    h.run = true; h.th = std::thread(ovLoop, (int)id, w, (float)d);
+}
+static void resizeHost(JNIEnv* e, int id, float wdp, float hdp) {
+    float d = g_host[id].d; e->CallStaticVoidMethod(g_host_cls, m_resize, (jint)id, (jint)(wdp * d), (jint)(hdp * d));
+}
+static void closeSide(JNIEnv* e) { g_sideOpen = false; resizeHost(e, 1, BUB, BUB); }
+static void cycleLockHz() {
+    std::vector<int> r; { std::lock_guard<std::mutex> l(g_mx); r = g_rates; } if (r.empty()) return;
+    int cur = g_lockHz, next = 0;
+    if (cur == 0) next = r[0]; else { auto it = std::find(r.begin(), r.end(), cur); next = (it != r.end() && it + 1 != r.end()) ? *(it + 1) : 0; }
+    g_lockHz = next;
+    if (next == 0) bg("settings delete system min_refresh_rate;settings delete system peak_refresh_rate");
+    else { char b[160]; snprintf(b, sizeof b, "settings put system min_refresh_rate %d;settings put system peak_refresh_rate %d", next, next); bg(b); }
+}
+static void toggleDnd() { bool v = !g_dnd; g_dnd = v; bg(v ? "cmd notification set_dnd priority" : "cmd notification set_dnd off"); }
+static void sideTap(JNIEnv* e, float x, float y, const Lay& L) {
+    for (int i = 0; i < 5; i++) if (L.app[i].has(x, y)) {
+        string p; { std::lock_guard<std::mutex> l(g_mx); if (i < (int)g_pinned.size()) p = g_pinned[i]; }
+        if (!p.empty()) { launchPkg(p, true); closeSide(e); } return;
+    }
+    for (int i = 0; i < 5; i++) if (L.tile[i].has(x, y)) {
+        if (i == 0) setMode((g_mode + 1) % 3);
+        else if (i == 1) cycleLockHz();
+        else if (i == 2) toggleDnd();
+        else if (i == 3) { g_orient = (g_orient + 1) % 3; saveOrient(); applyOrient(); }
+        else { openApp(2); closeSide(e); }
+        return;
+    }
+    if (L.btnApp.has(x, y)) { openApp(0); closeSide(e); return; }
+    if (L.btnClose.has(x, y)) closeSide(e);
+}
+extern "C" JNIEXPORT void JNICALL Java_com_udyneos_resteam_HostService_nativeTouch(JNIEnv* e, jclass, jint, jint a, jfloat rx, jfloat ry, jfloat x, jfloat y) {
+    static float lx, ly, sx, sy; static bool drag; static int zone; float dn = g_host[1].d; Lay L = layout(dn);
+    // Drag pindah HANYA dari bagian atas (bubble/baris judul). Tap: bubble tertutup = buka, baris atas = tutup, badan panel = shortcut
+    if (a == 0) { drag = false; sx = lx = rx; sy = ly = ry; zone = !g_sideOpen ? 0 : (y < L.y0 ? 1 : 2); }
+    else if (a == 2) {
+        if (!drag && hypotf(rx - sx, ry - sy) > 8 * dn) drag = true;
+        if (drag && zone < 2) { e->CallStaticVoidMethod(g_host_cls, m_move, 1, (jint)(rx - lx), (jint)(ry - ly)); lx = rx; ly = ry; }
+    } else if (a == 1 && !drag) {
+        if (zone == 0) { g_sideOpen = true; resizeHost(e, 1, SIDE_W, SIDE_H); std::thread(syncToggles).detach(); }
+        else if (zone == 1) closeSide(e);
+        else sideTap(e, x, y, L);
+    }
 }
 
 // ---------------- UI utama (landscape, gaya PS4/Steam) ----------------
@@ -829,7 +894,7 @@ static void mainUi(Ctx& x) {
       auto rt = [&](const string& s, ImU32 c) { float w = ImGui::CalcTextSize(s.c_str()).x; rx -= w; bg->AddText({rx, ty}, c, s.c_str()); rx -= f * 1.2f; };
       rt(clockText(), IM_COL32(255, 255, 255, 255)); rt(batText(), colBat(g_bat, g_chg));
       string net; { std::lock_guard<std::mutex> l(g_mx); net = g_net; } rt(net, IM_COL32(102, 192, 244, 255)); }
-    char b[96]; snprintf(b, sizeof b, "Resteam v1.7  |  ping %s ms", fv(g_ping, "").c_str());
+    char b[96]; snprintf(b, sizeof b, "Resteam v1.8  |  ping %s ms", fv(g_ping, "").c_str());
     bg->AddText({L + f, H - bot * 0.5f - f * 0.5f}, IM_COL32(143, 152, 160, 255), b);
     const char* chip = st == 2 ? "SHIZUKU: ON" : st == 1 ? "SHIZUKU: IZIN" : "SHIZUKU: OFF";
     bg->AddText({W - Rr - f - ImGui::CalcTextSize(chip).x, H - bot * 0.5f - f * 0.5f}, st == 2 ? IM_COL32(164, 208, 7, 255) : IM_COL32(255, 200, 40, 255), chip);
@@ -893,7 +958,7 @@ static void mainUi(Ctx& x) {
         ImGui::SetCursorScreenPos({p.x + is + f, p.y});
         ImGui::BeginGroup();
         ImGui::SetWindowFontScale(2.2f); ImGui::TextUnformatted("Resteam"); ImGui::SetWindowFontScale(1.f);
-        ImGui::TextColored(C(102, 192, 244), "Game Space untuk Android  |  v1.7");
+        ImGui::TextColored(C(102, 192, 244), "Game Space untuk Android  |  v1.8");
         ImGui::TextColored(C(143, 152, 160), "Package  com.udyneos.resteam");
         ImGui::TextColored(C(143, 152, 160), "Dibangun dengan C++17 (NDK), Dear ImGui, dan Shizuku");
         ImGui::EndGroup();
@@ -917,8 +982,9 @@ static void mainUi(Ctx& x) {
         ImGui::BulletText("Library game vertikal + info game online (Google Play) dan waktu bermain");
         ImGui::BulletText("Mode performa (Balanced / Performance / Battery) + tweak yang bisa diatur");
         ImGui::BulletText("Auto-switch mode dan resolusi layar per game, riwayat sesi dengan grafik FPS");
-        ImGui::BulletText("Floating bubble: FPS live, switch mode, tombol Settings, dan daftar app untuk PIP; update dari GitHub");
+        ImGui::BulletText("Bubble ala game panel: statistik live, app PIP, shortcut Mode / Lock FPS / DND / Rotasi / Settings; update dari GitHub");
         ImGui::Dummy({0, f * 0.3f}); ImGui::TextColored(C(102, 192, 244), "CATATAN VERSI TERBARU");
+        ImGui::BulletText("v1.8  Panel bubble baru: statistik, app, shortcut mode, lock FPS, DND, rotasi, settings");
         ImGui::BulletText("v1.7  Bubble tampil FPS + tombol Settings, update GitHub, kunci rotasi, overlay statistik dihapus");
         ImGui::BulletText("v1.6  Auto-switch + resolusi per game, riwayat sesi, tab About, build GitHub Actions");
         ImGui::BulletText("v1.5  Switch performa di bubble, library vertikal, tweak performa lebih banyak");
