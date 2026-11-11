@@ -1,8 +1,8 @@
 plugins { id("com.android.application") }
 
 // Versi bisa di-override dari CI: -PversionName=1.2-beta -PversionCode=12
-val vName = (project.findProperty("versionName") as String?) ?: "1.9"
-val vCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 3
+val vName = (project.findProperty("versionName") as String?) ?: "2.0"
+val vCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 4
 
 android {
     namespace = "com.udyneos.resteam"

@@ -99,7 +99,7 @@ static std::vector<unsigned char> callBytes(jmethodID m, const string& a, bool w
 // ---------------- state ----------------
 struct App { string pkg, label; bool game; };
 struct Info { int state = 0; bool online = false; string title, desc, genre, dev, rating, count, ver; long long inst = 0, upd = 0, size = 0; };
-static std::atomic<float> g_fps{-1}, g_cpu{-1}, g_gpu{-1}, g_ping{-1}, g_temp{0};
+static std::atomic<float> g_fps{-1}, g_cpu{-1}, g_gpu{-1}, g_ping{-1}, g_temp{0}, g_netKbps{0};
 static std::atomic<int> g_sh{0}, g_mode{0}, g_tab{0}, g_bat{-1}, g_insL{0}, g_insR{0}, g_insT{0}, g_fpsSrc{0};
 static std::atomic<bool> g_run{true}, g_sideOn{false}, g_sideOpen{false}, g_chg{false}, g_showAll{false}, g_updAvail{false};
 static std::atomic<int> g_dlPct{0}, g_orient{0}, g_lockHz{0}, g_bri{128}, g_gpuSrc{0}; static std::atomic<bool> g_dnd{false}, g_autoBri{true}, g_sfOk{false};
@@ -282,7 +282,32 @@ static bool safePkg(const string& p) { if (p.empty()) return false; for (char c 
 static void statsLoop() {
     long long pt = 0, pi = 0; bool got = false; auto last = Clock::now(); int tick = 0; bool ratesDone = false, updTried = false;
     while (g_run) {
-        g_ping = pingMs(); int st = shState(); g_sh = st; sysInfo();
+        g_ping = pingMs();
+        static long long lastRx = 0, lastTx = 0; static Clock::time_point lastNetT;
+        {
+            FILE* f = fopen("/proc/net/dev", "r"); if (f) {
+                char line[512]; long long rx = 0, tx = 0;
+                while (fgets(line, sizeof line, f)) {
+                    // cari wlan0, rmnet_data, rmnet_ipa, eth0
+                    if (strstr(line, "wlan0") || strstr(line, "rmnet_data") || strstr(line, "rmnet_ipa") || strstr(line, "eth0")) {
+                        // format: iface: rx_bytes rx_packets ... tx_bytes tx_packets ...
+                        char* colon = strchr(line, ':'); if (!colon) continue;
+                        char* p = colon + 1;
+                        long long vals[16]; int n = 0;
+                        while (*p && n < 16) { while (*p == ' ') p++; if (*p) { vals[n++] = atoll(p); while (*p && *p != ' ') p++; } }
+                        if (n >= 9) { rx += vals[0]; tx += vals[8]; }
+                    }
+                }
+                fclose(f);
+                auto now = Clock::now(); double dt = std::chrono::duration<double>(now - lastNetT).count();
+                if (dt > 0.5 && lastRx > 0) {
+                    float kbps = (float)((rx - lastRx) + (tx - lastTx)) / 1024.0f / (float)dt;
+                    g_netKbps = std::max(0.f, kbps);
+                }
+                lastRx = rx; lastTx = tx; lastNetT = now;
+            }
+        }
+        int st = shState(); g_sh = st; sysInfo();
         if (!got) { got = true; refreshPkgs(); }
         if (!updTried && g_ping >= 0 && autoUpdOn()) { updTried = true; checkUpdate(); }
         auto now = Clock::now(); double dt = std::chrono::duration<double>(now - last).count(); last = now;
@@ -461,6 +486,7 @@ static ImU32 colBat(int bat, bool chg) { return chg ? IM_COL32(26,159,255,255) :
 static string shortName(const string& p) { size_t a = p.rfind('.'); if (a == string::npos || a == 0) return p; size_t b = p.rfind('.', a - 1); return b == string::npos ? p : p.substr(b + 1); }
 static string labelOfNL(const string& pkg) { for (auto& a : g_apps) if (a.pkg == pkg) return a.label; return shortName(pkg); }
 static string batText() { char b[48]; snprintf(b, sizeof b, "BAT %d%%  %.0fC%s", (int)g_bat, (float)g_temp, g_chg ? "  CHG" : ""); return b; }
+static string netText() { float k = g_netKbps; if (k < 0) return "--"; if (k < 1024) { char b[32]; snprintf(b, sizeof b, "%.0f KB/s", k); return b; } char b[32]; snprintf(b, sizeof b, "%.1f MB/s", k / 1024.f); return b; }
 static string clockText() { time_t t = time(nullptr); tm lt; localtime_r(&t, &lt); char b[16]; strftime(b, sizeof b, "%H:%M", &lt); return b; }
 static string fmtHMS(double s) { int t = (int)s; char b[24]; snprintf(b, sizeof b, "%02d:%02d:%02d", t / 3600, (t % 3600) / 60, t % 60); return b; }
 static string fmtTotal(double s) { int t = (int)s; char b[24]; snprintf(b, sizeof b, "%dj %02dm", t / 3600, (t % 3600) / 60); return b; }
@@ -707,7 +733,7 @@ static void openApp(int tab) {   // dari panel: kembali ke aplikasi (tab 0 libra
 static std::map<string, Icon> g_ovIcons; static int g_ovBudget = 0;   // cache ikon milik thread overlay (konteks GL terpisah)
 static Icon& ovIcon(const string& pkg) { Icon& ic = g_ovIcons[pkg]; if (!ic.tried && g_ovBudget > 0) { g_ovBudget--; ic.tried = true; loadIcon(pkg, ic); } return ic; }
 struct Rect { float x0 = 0, y0 = 0, x1 = 0, y1 = 0; bool has(float x, float y) const { return x >= x0 && x <= x1 && y >= y0 && y <= y1; } };
-struct Lay { float W, H, statX, statY, statH, sepX; Rect app[5], tile[6], autoBtn, slider, btnApp, btnClose; };
+struct Lay { float W, H, statX, statY, statH, sepX; Rect app[5], tile[6], autoBtn, slider, btnApp, btnSet, btnClose; };
 static Lay layout(float dn, float Hpx) {
     Lay L; L.W = SIDE_W * dn; L.H = Hpx; float y0 = HDR * dn;
     L.statX = 10 * dn; L.statY = y0 + 10 * dn; L.statH = 34 * dn; L.sepX = 72 * dn;
@@ -715,7 +741,7 @@ static Lay layout(float dn, float Hpx) {
     for (int i = 0; i < 5; i++) { float cx = rx0 + i * sl + sl * 0.5f; L.app[i] = Rect{cx - ic / 2, ay, cx + ic / 2, ay + ic}; }
     float gy = y0 + 56 * dn, cw = rw / 3, ch = 62 * dn;
     for (int i = 0; i < 6; i++) { int c = i % 3, r = i / 3; L.tile[i] = Rect{rx0 + c * cw, gy + r * ch, rx0 + (c + 1) * cw, gy + (r + 1) * ch}; }
-    float by = Hpx - 38 * dn; L.btnApp = Rect{rx0, by, rx0 + 108 * dn, by + 30 * dn}; L.btnClose = Rect{rx0 + 116 * dn, by, rx0 + rw, by + 30 * dn};
+    float by = Hpx - 38 * dn; float bw = (rw - 16 * dn) / 3; L.btnApp = Rect{rx0, by, rx0 + bw, by + 30 * dn}; L.btnSet = Rect{rx0 + bw + 8 * dn, by, rx0 + bw * 2 + 8 * dn, by + 30 * dn}; L.btnClose = Rect{rx0 + bw * 2 + 16 * dn, by, rx0 + rw, by + 30 * dn};
     float sb = Hpx - 22 * dn, st = std::max(y0 + 250 * dn, sb - 130 * dn);   // slider kecerahan + tombol A
     L.slider = Rect{26 * dn, st, 52 * dn, sb}; L.autoBtn = Rect{24 * dn, st - 36 * dn, 54 * dn, st - 6 * dn};
     return L;
@@ -767,8 +793,8 @@ static void sideUi(Ctx& x) {
     // kolom statistik kiri
     double ses = 0, tot = 0; std::vector<string> pins; { std::lock_guard<std::mutex> l(g_mx); getPlayNL(g_target, ses, tot); pins = g_pinned; }
     struct Row { const char* l; string v; ImU32 c; };
-    Row rows[5] = {{"CPU", fv(g_cpu, "%"), blue}, {"GPU", fv(g_gpu, "%"), blue}, {"FPS", fv(g_fps, ""), colFps(g_fps)}, {"PING", fv(g_ping, " ms"), colPing(g_ping)}, {"MAIN", ses > 0 ? fmtHMS(ses) : string("--:--:--"), white}};
-    for (int i = 0; i < 5; i++) { float y = L.statY + i * L.statH; d->AddText(ft, fs * 0.9f, {L.statX, y}, grey, rows[i].l); d->AddText(ft, fs * 1.1f, {L.statX, y + fs * 1.0f}, rows[i].c, rows[i].v.c_str()); }
+    Row rows[6] = {{"CPU", fv(g_cpu, "%"), blue}, {"GPU", fv(g_gpu, "%"), blue}, {"FPS", fv(g_fps, ""), colFps(g_fps)}, {"PING", fv(g_ping, " ms"), colPing(g_ping)}, {"NET", netText(), blue}, {"MAIN", ses > 0 ? fmtHMS(ses) : string("--:--:--"), white}};
+    for (int i = 0; i < 6; i++) { float y = L.statY + i * L.statH; d->AddText(ft, fs * 0.9f, {L.statX, y}, grey, rows[i].l); d->AddText(ft, fs * 1.1f, {L.statX, y + fs * 1.0f}, rows[i].c, rows[i].v.c_str()); }
     d->AddLine({L.sepX, hh + 8 * dn}, {L.sepX, H - 8 * dn}, IM_COL32(60, 66, 100, 255), 1.5f);
     // slider kecerahan + tombol A
     { const Rect& s = L.slider; float rr = (s.x1 - s.x0) * 0.5f, bri = g_bri / 255.f, fy = s.y1 - (s.y1 - s.y0) * bri;
@@ -794,13 +820,14 @@ static void sideUi(Ctx& x) {
     tileDraw(d, ft, L.tile[2], dn, fs, 2, "DND", "", g_dnd, ac);
     int ori = g_orient; tileDraw(d, ft, L.tile[3], dn, fs, 0, "Rotasi", ori == 1 ? "LOCK" : ori == 2 ? "LAND" : "AUTO", ori != 0, ac);
     tileDraw(d, ft, L.tile[4], dn, fs, 3, "Kecerahan", "", !g_autoBri, ac);
-    tileDraw(d, ft, L.tile[5], dn, fs, 1, "Settings", "", false, 0);
+    tileDraw(d, ft, L.tile[5], dn, fs, 0, "BOOST", "TURBO", true, IM_COL32(255, 60, 90, 255));
     // tombol bawah
-    const Rect& ba = L.btnApp; const Rect& bc = L.btnClose;
-    d->AddRectFilled({ba.x0, ba.y0}, {ba.x1, ba.y1}, ac, f * 0.5f); d->AddRectFilled({bc.x0, bc.y0}, {bc.x1, bc.y1}, IM_COL32(44, 48, 74, 255), f * 0.5f);
-    float t1 = ft->CalcTextSizeA(fs, FLT_MAX, 0, "RESTEAM").x, t2 = ft->CalcTextSizeA(fs, FLT_MAX, 0, "TUTUP").x;
+    const Rect& ba = L.btnApp; const Rect& bs = L.btnSet; const Rect& bc = L.btnClose;
+    d->AddRectFilled({ba.x0, ba.y0}, {ba.x1, ba.y1}, ac, f * 0.5f); d->AddRectFilled({bs.x0, bs.y0}, {bs.x1, bs.y1}, IM_COL32(61, 77, 92, 255), f * 0.5f); d->AddRectFilled({bc.x0, bc.y0}, {bc.x1, bc.y1}, IM_COL32(44, 48, 74, 255), f * 0.5f);
+    float t1 = ft->CalcTextSizeA(fs, FLT_MAX, 0, "RESTEAM").x, t2 = ft->CalcTextSizeA(fs, FLT_MAX, 0, "SETTINGS").x, t3 = ft->CalcTextSizeA(fs, FLT_MAX, 0, "TUTUP").x;
     d->AddText(ft, fs, {(ba.x0 + ba.x1) * 0.5f - t1 * 0.5f, (ba.y0 + ba.y1) * 0.5f - fs * 0.5f}, white, "RESTEAM");
-    d->AddText(ft, fs, {(bc.x0 + bc.x1) * 0.5f - t2 * 0.5f, (bc.y0 + bc.y1) * 0.5f - fs * 0.5f}, white, "TUTUP");
+    d->AddText(ft, fs, {(bs.x0 + bs.x1) * 0.5f - t2 * 0.5f, (bs.y0 + bs.y1) * 0.5f - fs * 0.5f}, white, "SETTINGS");
+    d->AddText(ft, fs, {(bc.x0 + bc.x1) * 0.5f - t3 * 0.5f, (bc.y0 + bc.y1) * 0.5f - fs * 0.5f}, white, "TUTUP");
 }
 
 static void ovLoop(int id, ANativeWindow* win, float dens) {
@@ -853,10 +880,15 @@ static void sideTap(JNIEnv* e, float x, float y, const Lay& L) {
         else if (i == 2) toggleDnd();
         else if (i == 3) { g_orient = (g_orient + 1) % 3; saveOrient(); applyOrient(true); }
         else if (i == 4) { bool a = g_autoBri; g_autoBri = !a; bg(a ? "settings put system screen_brightness_mode 0" : "settings put system screen_brightness_mode 1"); }   // kunci / lepas kecerahan
-        else { openApp(2); closeSide(e); }
+        else {   // BOOST: one-tap game boost
+            setMode(1);
+            bg("am kill-all;settings put system min_refresh_rate 120;settings put system peak_refresh_rate 120;cmd notification set_dnd priority;");
+            closeSide(e);
+        }
         return;
     }
     if (L.btnApp.has(x, y)) { openApp(0); closeSide(e); return; }
+    if (L.btnSet.has(x, y)) { openApp(2); closeSide(e); return; }
     if (L.btnClose.has(x, y)) closeSide(e);
 }
 extern "C" JNIEXPORT void JNICALL Java_com_udyneos_resteam_HostService_nativeTouch(JNIEnv* e, jclass, jint, jint a, jfloat rx, jfloat ry, jfloat x, jfloat y) {
@@ -881,10 +913,17 @@ static bool Btn(const char* l, ImVec4 c, ImVec2 s) {
     bool r = ImGui::Button(l, s); ImGui::PopStyleColor(3); return r;
 }
 static void card(ImDrawList* d, ImVec2 p, ImVec2 s, float f, const char* lab, const string& v, ImU32 col) {
-    d->AddRectFilled(p, {p.x + s.x, p.y + s.y}, IM_COL32(23, 26, 33, 255), f * 0.3f);
-    d->AddRectFilled(p, {p.x + s.x, p.y + f * 0.15f}, col, f * 0.3f);
-    d->AddText({p.x + f * 0.7f, p.y + f * 0.6f}, IM_COL32(143, 152, 160, 255), lab);
-    d->AddText(ImGui::GetFont(), f * 1.9f, {p.x + f * 0.7f, p.y + f * 1.9f}, col, v.c_str());
+    d->AddRectFilled(p, {p.x + s.x, p.y + s.y}, IM_COL32(23, 26, 33, 255), f * 0.35f);
+    d->AddRect(p, {p.x + s.x, p.y + s.y}, IM_COL32(60, 70, 90, 120), f * 0.35f, 0, 1.5f);
+    d->AddRectFilled(p, {p.x + s.x, p.y + f * 0.14f}, col, f * 0.35f, ImDrawFlags_RoundCornersTopLeft | ImDrawFlags_RoundCornersTopRight);
+    d->AddRectFilled({p.x, p.y + f * 0.14f}, {p.x + f * 0.06f, p.y + s.y}, col, 0);
+    d->AddText({p.x + f * 0.8f, p.y + f * 0.55f}, IM_COL32(143, 152, 160, 200), lab);
+    d->AddText(ImGui::GetFont(), f * 2.1f, {p.x + f * 0.8f, p.y + f * 2.2f}, col, v.c_str());
+    // mini trend sparkline (4 titik acak-berdasarkan nilai sebagai indikator aktif)
+    if (v != "--") {
+        float vals[4] = {0.3f, 0.55f, 0.4f, 0.7f}; float sx = p.x + s.x - f * 1.2f, sy = p.y + s.y - f * 0.9f;
+        for (int i = 0; i < 3; i++) d->AddLine({sx + i * f * 0.25f, sy - vals[i] * f}, {sx + (i + 1) * f * 0.25f, sy - vals[i + 1] * f}, col, 2.f);
+    }
 }
 static void saveBubble() { FILE* f = fopen((g_dir + "/bubble.txt").c_str(), "w"); if (!f) return; fprintf(f, "%d\n", g_sideOn ? 1 : 0); fclose(f); }
 // BUBBLE ON = layanan aktif; tab hanya tampil saat game dari library berjalan (diatur updateBubble)
@@ -972,11 +1011,12 @@ static void mainUi(Ctx& x) {
     bg->AddRectFilled({0, H - bot}, {W, H}, IM_COL32(23, 26, 33, 255));
     float ty = T + (f * 2.6f - f) * 0.5f;
     bg->AddText(ft, f * 1.5f, {L + f, T + (f * 2.6f - f * 1.5f) * 0.5f}, IM_COL32(255, 255, 255, 255), "RESTEAM");
-    { float rx = W - Rr - f;   // pengganti status bar: jam, baterai, jaringan
+    { float rx = W - Rr - f;   // pengganti status bar: jam, baterai, jaringan, kecepatan jaringan
       auto rt = [&](const string& s, ImU32 c) { float w = ImGui::CalcTextSize(s.c_str()).x; rx -= w; bg->AddText({rx, ty}, c, s.c_str()); rx -= f * 1.2f; };
       rt(clockText(), IM_COL32(255, 255, 255, 255)); rt(batText(), colBat(g_bat, g_chg));
-      string net; { std::lock_guard<std::mutex> l(g_mx); net = g_net; } rt(net, IM_COL32(102, 192, 244, 255)); }
-    char b[96]; snprintf(b, sizeof b, "Resteam v1.9  |  ping %s ms", fv(g_ping, "").c_str());
+      string net; { std::lock_guard<std::mutex> l(g_mx); net = g_net; } rt(net, IM_COL32(102, 192, 244, 255));
+      string nsp = netText(); if (nsp != "--") rt(nsp, IM_COL32(164, 208, 7, 255)); }
+    char b[96]; snprintf(b, sizeof b, "Resteam v2.0  |  ping %s ms", fv(g_ping, "").c_str());
     bg->AddText({L + f, H - bot * 0.5f - f * 0.5f}, IM_COL32(143, 152, 160, 255), b);
     const char* chip = st == 2 ? "SHIZUKU: ON" : st == 1 ? "SHIZUKU: IZIN" : "SHIZUKU: OFF";
     bg->AddText({W - Rr - f - ImGui::CalcTextSize(chip).x, H - bot * 0.5f - f * 0.5f}, st == 2 ? IM_COL32(164, 208, 7, 255) : IM_COL32(255, 200, 40, 255), chip);
@@ -1040,7 +1080,7 @@ static void mainUi(Ctx& x) {
         ImGui::SetCursorScreenPos({p.x + is + f, p.y});
         ImGui::BeginGroup();
         ImGui::SetWindowFontScale(2.2f); ImGui::TextUnformatted("Resteam"); ImGui::SetWindowFontScale(1.f);
-        ImGui::TextColored(C(102, 192, 244), "Game Space untuk Android  |  v1.9");
+        ImGui::TextColored(C(102, 192, 244), "Game Space untuk Android  |  v2.0");
         ImGui::TextColored(C(143, 152, 160), "Package  com.udyneos.resteam");
         ImGui::TextColored(C(143, 152, 160), "Dibangun dengan C++17 (NDK), Dear ImGui, dan Shizuku");
         ImGui::EndGroup();
@@ -1065,7 +1105,8 @@ static void mainUi(Ctx& x) {
         ImGui::BulletText("Mode performa (Balanced / Performance / Battery) + tweak yang bisa diatur");
         ImGui::BulletText("Auto-switch mode dan resolusi layar per game, riwayat sesi dengan grafik FPS");
         ImGui::BulletText("Tab FPS di kiri atas (hanya saat game berjalan) -> panel penuh: statistik, app PIP, Mode / Lock FPS / DND / Rotasi / Kecerahan / Settings");
-        ImGui::Dummy({0, f * 0.3f}); ImGui::TextColored(C(102, 192, 244), "CATATAN VERSI TERBARU");
+        ImGui::Dummy({0, f * 0.3f});         ImGui::TextColored(C(102, 192, 244), "CATATAN VERSI TERBARU");
+        ImGui::BulletText("v2.0  Kecepatan jaringan (KB/s) di status bar + overlay, tombol BOOST one-tap, kartu statistik diperbaiki, desain panel bubble ditingkatkan");
         ImGui::BulletText("v1.9  Tab docked muncul saat game jalan, panel penuh + kunci kecerahan, info Wikipedia, FPS/GPU fallback berlapis");
         ImGui::BulletText("v1.8  Panel bubble baru: statistik, app, shortcut mode, lock FPS, DND, rotasi, settings");
         ImGui::BulletText("v1.7  Bubble tampil FPS + tombol Settings, update GitHub, kunci rotasi, overlay statistik dihapus");
@@ -1157,13 +1198,14 @@ static void mainUi(Ctx& x) {
     ImGui::SameLine();
     if (Btn("MINIMIZE", C(61, 77, 92), ImVec2(bw2, f * 2.2f))) { Env v; v.e->CallStaticVoidMethod(g_bridge, m_pip, g_act); }
     ImGui::Dummy({0, f * 0.4f});
-    ImVec2 p = ImGui::GetCursorScreenPos(); float gap = f * 0.6f, cw2 = (ImGui::GetContentRegionAvail().x - gap) / 2, ch = f * 4.6f;
+    ImVec2 p = ImGui::GetCursorScreenPos(); float gap = f * 0.6f, cw2 = (ImGui::GetContentRegionAvail().x - gap) / 2, ch = f * 4.2f;
     ImDrawList* d = ImGui::GetWindowDrawList();
     card(d, p, {cw2, ch}, f, fpsLabel(), fv(g_fps, ""), IM_COL32(164, 208, 7, 255));
     card(d, {p.x + cw2 + gap, p.y}, {cw2, ch}, f, gpuLabel(), fv(g_gpu, "%"), IM_COL32(102, 192, 244, 255));
     card(d, {p.x, p.y + ch + gap}, {cw2, ch}, f, "CPU", fv(g_cpu, "%"), IM_COL32(102, 192, 244, 255));
-    card(d, {p.x + cw2 + gap, p.y + ch + gap}, {cw2, ch}, f, "PING (ms)", fv(g_ping, ""), colPing(g_ping));
-    ImGui::Dummy({0, 2 * ch + gap});
+    card(d, {p.x + cw2 + gap, p.y + ch + gap}, {cw2, ch}, f, "PING", fv(g_ping, " ms"), colPing(g_ping));
+    card(d, {p.x, p.y + 2 * (ch + gap)}, {cw2, ch}, f, "JARINGAN", netText(), IM_COL32(255, 200, 40, 255));
+    ImGui::Dummy({0, 2 * (ch + gap) + f});
     ImGui::End();
 }
 
