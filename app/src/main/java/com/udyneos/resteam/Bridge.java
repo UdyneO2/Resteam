@@ -46,7 +46,7 @@ public class Bridge {
         Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + c.getPackageName()));
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); c.startActivity(i);
     }
-    public static void startOverlay(Context c, int id) { c.startService(new Intent(c, SideService.class)); }
+    public static void startOverlay(Context c, int id) { c.startForegroundService(new Intent(c, SideService.class)); }
     public static void stopOverlay(Context c, int id) { c.stopService(new Intent(c, SideService.class)); }
     public static void enterPip(final Activity a) {
         a.runOnUiThread(() -> a.enterPictureInPictureMode(
