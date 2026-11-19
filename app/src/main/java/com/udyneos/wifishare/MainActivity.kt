@@ -11,6 +11,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Settings
@@ -23,19 +26,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.udyneos.wifishare.ui.components.GlassBottomBar
+import com.udyneos.wifishare.ui.components.GlassHost
 import com.udyneos.wifishare.ui.components.GlassTextDialog
 import com.udyneos.wifishare.ui.components.LocalGlassOpacity
-import com.udyneos.wifishare.ui.components.TextEditRequest
-import com.udyneos.wifishare.ui.components.GlassHost
 import com.udyneos.wifishare.ui.components.Tab
+import com.udyneos.wifishare.ui.components.TextEditRequest
 import com.udyneos.wifishare.ui.screens.ClientScreen
 import com.udyneos.wifishare.ui.screens.SettingsScreen
 import com.udyneos.wifishare.ui.screens.WifiScreen
 import com.udyneos.wifishare.ui.theme.WifiShareTheme
+
+private val DashboardNavyBg = Color(0xFF0B1222)
 
 class MainActivity : ComponentActivity() {
 
@@ -101,11 +107,13 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val icons = mapOf(
-                    Tab.WIFI to Icons.Rounded.Wifi,
-                    Tab.CLIENT to Icons.Rounded.Link,
-                    Tab.SETTINGS to Icons.Rounded.Settings,
-                )
+                val icons = remember {
+                    mapOf(
+                        Tab.WIFI to Icons.Rounded.Wifi,
+                        Tab.CLIENT to Icons.Rounded.Link,
+                        Tab.SETTINGS to Icons.Rounded.Settings,
+                    )
+                }
 
                 CompositionLocalProvider(LocalGlassOpacity provides settings.glassOpacity) {
                     GlassHost(
@@ -126,30 +134,36 @@ class MainActivity : ComponentActivity() {
                             )
                         },
                     ) { wallpaper ->
-                        when (tab) {
-                            Tab.WIFI -> WifiScreen(
-                                wallpaper = wallpaper,
-                                state = shareState,
-                                onToggle = toggle,
-                                bottomInset = 110.dp,
-                            )
-                            Tab.CLIENT -> ClientScreen(
-                                wallpaper = wallpaper,
-                                settings = settings,
-                                state = clientState,
-                                sharing = shareState.active || shareState.busy,
-                                bottomInset = 110.dp,
-                                onConnect = viewModel::connectClient,
-                                onDisconnect = viewModel::disconnectClient,
-                                onEdit = { dialog = it },
-                            )
-                            Tab.SETTINGS -> SettingsScreen(
-                                wallpaper = wallpaper,
-                                settings = settings,
-                                sharing = shareState.active,
-                                bottomInset = 110.dp,
-                                onEdit = { dialog = it },
-                            )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(DashboardNavyBg),
+                        ) {
+                            when (tab) {
+                                Tab.WIFI -> WifiScreen(
+                                    wallpaper = wallpaper,
+                                    state = shareState,
+                                    onToggle = toggle,
+                                    bottomInset = 110.dp,
+                                )
+                                Tab.CLIENT -> ClientScreen(
+                                    wallpaper = wallpaper,
+                                    settings = settings,
+                                    state = clientState,
+                                    sharing = shareState.active || shareState.busy,
+                                    bottomInset = 110.dp,
+                                    onConnect = viewModel::connectClient,
+                                    onDisconnect = viewModel::disconnectClient,
+                                    onEdit = { dialog = it },
+                                )
+                                Tab.SETTINGS -> SettingsScreen(
+                                    wallpaper = wallpaper,
+                                    settings = settings,
+                                    sharing = shareState.active,
+                                    bottomInset = 110.dp,
+                                    onEdit = { dialog = it },
+                                )
+                            }
                         }
                     }
                 }

@@ -63,13 +63,6 @@ enum class Tab(val label: String) {
 
 private val TabGap = 4.dp
 
-/**
- * Bottom bar kaca berbentuk pil (tutorial Glass Bottom Bar dari Backdrop). Indikator tab aktif
- * adalah satu kaca bening tanpa tint yang meluncur dengan pegas antar tab saat di-tap maupun di-swipe,
- * membesar saat ditekan/digeser, dan memberi aksen ios.blue pada ikon & teks tab aktif.
- *
- * [backdrop] harus layer yang TIDAK memuat bar ini (lihat GlassHost).
- */
 @Composable
 fun GlassBottomBar(
     backdrop: Backdrop,
@@ -79,8 +72,8 @@ fun GlassBottomBar(
     modifier: Modifier = Modifier,
 ) {
     val ios = Ios.colors
-    val surface = glassTint(0.12f)
-    val thumbSurface = glassTint(0.16f)
+    val surface = glassTint(0.14f)
+    val thumbSurface = glassTint(0.18f)
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val press = remember { Animatable(0f) }
@@ -88,7 +81,7 @@ fun GlassBottomBar(
     Box(
         modifier = modifier
             .navigationBarsPadding()
-            .padding(horizontal = 28.dp, vertical = 10.dp)
+            .padding(horizontal = 24.dp, vertical = 10.dp)
             .fillMaxWidth()
             .height(64.dp)
             .drawBackdrop(
@@ -165,9 +158,39 @@ fun GlassBottomBar(
                 }
             }
 
+            // 1. Indikator kaca bening tanpa tint di lapisan bawah Row agar ikon & label tidak tertutup/terdistorsi
+            Box(
+                Modifier
+                    .offset { IntOffset(indicatorPx.value.roundToInt(), 0) }
+                    .width(tabWidth)
+                    .fillMaxHeight()
+                    .drawBackdrop(
+                        backdrop = backdrop,
+                        shape = { CircleShape },
+                        effects = {
+                            vibrancy()
+                            blur(3.dp.toPx())
+                            if (supportsLens) lens(8.dp.toPx(), 16.dp.toPx())
+                        },
+                        layerBlock = {
+                            val maxScale = ((size.height + 8.dp.toPx()) / size.height)
+                                .coerceAtLeast((size.width + 14.dp.toPx()) / size.width)
+                            val scale = lerp(1f, maxScale, press.value)
+                            scaleX = scale
+                            scaleY = scale
+                        },
+                        onDrawSurface = {
+                            drawRect(thumbSurface)
+                            glassEdge(size.minDimension / 2f, ios.isDark)
+                        },
+                    ),
+            )
+
+            // 2. Konten tab di atas indikator kaca dengan translationZ agar ikon & teks selalu terlihat jelas
             Row(
                 modifier = Modifier
                     .fillMaxSize()
+                    .graphicsLayer { translationZ = 1f }
                     .pointerInput(tabStridePx, maxOffsetPx, selected) {
                         detectHorizontalDragGestures(
                             onDragStart = {
@@ -196,44 +219,18 @@ fun GlassBottomBar(
                 horizontalArrangement = Arrangement.spacedBy(TabGap),
             ) {
                 Tab.entries.forEach { tab ->
-                    TabItem(
-                        tab = tab,
-                        icon = icons.getValue(tab),
-                        active = tab == highlightedTab,
-                        onClick = { onSelect(tab) },
-                        onPressChange = onPressChange,
-                    )
+                    val iconVector = icons[tab]
+                    if (iconVector != null) {
+                        TabItem(
+                            tab = tab,
+                            icon = iconVector,
+                            active = tab == highlightedTab,
+                            onClick = { onSelect(tab) },
+                            onPressChange = onPressChange,
+                        )
+                    }
                 }
             }
-
-            // kaca bening tanpa tint yang meluncur dan membesar saat ditekan/digeser
-            Box(
-                Modifier
-                    .offset { IntOffset(indicatorPx.value.roundToInt(), 0) }
-                    .width(tabWidth)
-                    .fillMaxHeight()
-                    .drawBackdrop(
-                        backdrop = backdrop,
-                        shape = { CircleShape },
-                        effects = {
-                            vibrancy()
-                            blur(4.dp.toPx())
-                            if (supportsLens) lens(12.dp.toPx(), 24.dp.toPx())
-                        },
-                        // press-to-scale: layerBlock, bukan graphicsLayer, supaya backdrop tidak ikut membesar
-                        layerBlock = {
-                            val maxScale = ((size.height + 10.dp.toPx()) / size.height)
-                                .coerceAtLeast((size.width + 18.dp.toPx()) / size.width)
-                            val scale = lerp(1f, maxScale, press.value)
-                            scaleX = scale
-                            scaleY = scale
-                        },
-                        onDrawSurface = {
-                            drawRect(thumbSurface)
-                            glassEdge(size.minDimension / 2f, ios.isDark)
-                        },
-                    ),
-            )
         }
     }
 }
@@ -251,10 +248,9 @@ private fun RowScope.TabItem(
         targetValue = if (active) ios.blue else ios.secondaryLabel,
         label = "tabTint",
     )
-    // ikon sedikit membesar dan memantul saat tab dipilih
     val iconScale by animateFloatAsState(
-        targetValue = if (active) 1.14f else 1f,
-        animationSpec = spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessMedium),
+        targetValue = if (active) 1.12f else 1f,
+        animationSpec = spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium),
         label = "iconScale",
     )
 
@@ -263,7 +259,7 @@ private fun RowScope.TabItem(
             .weight(1f)
             .fillMaxHeight()
             .clickable(
-                interactionSource = MutableInteractionSource(),
+                interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 onClick = onClick,
             )
@@ -283,12 +279,18 @@ private fun RowScope.TabItem(
             contentDescription = tab.label,
             tint = content,
             modifier = Modifier
-                .size(26.dp)
+                .size(24.dp)
                 .graphicsLayer {
                     scaleX = iconScale
                     scaleY = iconScale
                 },
         )
-        Text(tab.label, color = content, fontSize = 10.sp)
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = tab.label,
+            color = content,
+            fontSize = 10.sp,
+            maxLines = 1,
+        )
     }
 }
