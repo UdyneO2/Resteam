@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "WifiShare"
+rootProject.name = "GlassLauncher"
 include(":app")

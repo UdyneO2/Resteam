@@ -1,7 +1,8 @@
-.gradle/
-build/
-local.properties
 *.iml
+.gradle/
+local.properties
 .idea/
-*.apk
+build/
+captures/
 *.jks
+*.keystore
