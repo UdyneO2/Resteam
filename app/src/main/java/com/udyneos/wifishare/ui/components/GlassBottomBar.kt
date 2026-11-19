@@ -3,12 +3,12 @@ package com.udyneos.wifishare.ui.components
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -30,16 +30,18 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -51,6 +53,7 @@ import com.kyant.backdrop.effects.lens
 import com.kyant.backdrop.effects.vibrancy
 import com.udyneos.wifishare.ui.theme.Ios
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 enum class Tab(val label: String) {
     WIFI("WiFi"),
@@ -62,7 +65,8 @@ private val TabGap = 4.dp
 
 /**
  * Bottom bar kaca berbentuk pil (tutorial Glass Bottom Bar dari Backdrop). Indikator tab aktif
- * adalah satu kaca bertint yang meluncur dengan pegas antar tab, bukan muncul-hilang per tab.
+ * adalah satu kaca bening tanpa tint yang meluncur dengan pegas antar tab saat di-tap maupun di-swipe,
+ * dengan aksen ios.blue pada ikon dan teks tab aktif.
  *
  * [backdrop] harus layer yang TIDAK memuat bar ini (lihat GlassHost).
  */
@@ -76,9 +80,10 @@ fun GlassBottomBar(
 ) {
     val ios = Ios.colors
     val surface = glassTint(0.12f)
+    val thumbSurface = glassTint(0.16f)
     val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
     val press = remember { Animatable(0f) }
-    val accent = ios.blue
 
     Box(
         modifier = modifier
@@ -104,20 +109,59 @@ fun GlassBottomBar(
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val count = Tab.entries.size
             val tabWidth = (maxWidth - TabGap * (count - 1)) / count
-            val indicatorX by animateDpAsState(
-                targetValue = (tabWidth + TabGap) * selected.ordinal,
-                animationSpec = spring(dampingRatio = 0.68f, stiffness = Spring.StiffnessMediumLow),
-                label = "indicatorX",
-            )
+            val tabStridePx = with(density) { (tabWidth + TabGap).toPx() }
+            val maxOffsetPx = tabStridePx * (count - 1).coerceAtLeast(0)
 
-            val onPressChange: (Boolean) -> Unit = { pressed ->
-                scope.launch { press.animateTo(if (pressed) 1f else 0f, spring(0.5f, 300f, 0.001f)) }
+            val indicatorPx = remember { Animatable(tabStridePx * selected.ordinal) }
+            var isDragging by remember { mutableStateOf(false) }
+
+            LaunchedEffect(selected, tabStridePx, isDragging) {
+                if (!isDragging) {
+                    indicatorPx.animateTo(
+                        targetValue = (tabStridePx * selected.ordinal).coerceIn(0f, maxOffsetPx),
+                        animationSpec = spring(
+                            dampingRatio = 0.68f,
+                            stiffness = Spring.StiffnessMediumLow,
+                        ),
+                    )
+                }
             }
 
-            // kaca bertint yang meluncur; BlendMode.Hue supaya warna backdrop menyesuaikan tint
+            val onPressChange: (Boolean) -> Unit = { pressed ->
+                scope.launch {
+                    press.animateTo(
+                        targetValue = if (pressed) 1f else 0f,
+                        animationSpec = spring(0.5f, 300f, 0.001f),
+                    )
+                }
+            }
+
+            fun snapToNearestTab() {
+                if (tabStridePx <= 0f) return
+                val targetIndex = (indicatorPx.value / tabStridePx)
+                    .roundToInt()
+                    .coerceIn(0, count - 1)
+                val targetTab = Tab.entries[targetIndex]
+                val targetPx = tabStridePx * targetIndex
+
+                scope.launch {
+                    indicatorPx.animateTo(
+                        targetValue = targetPx,
+                        animationSpec = spring(
+                            dampingRatio = 0.68f,
+                            stiffness = Spring.StiffnessMediumLow,
+                        ),
+                    )
+                }
+                if (targetTab != selected) {
+                    onSelect(targetTab)
+                }
+            }
+
+            // kaca bening tanpa tint yang meluncur
             Box(
                 Modifier
-                    .offset { IntOffset(indicatorX.roundToPx(), 0) }
+                    .offset { IntOffset(indicatorPx.value.roundToInt(), 0) }
                     .width(tabWidth)
                     .fillMaxHeight()
                     .drawBackdrop(
@@ -136,14 +180,40 @@ fun GlassBottomBar(
                             scaleY = scale
                         },
                         onDrawSurface = {
-                            drawRect(accent, blendMode = BlendMode.Hue)
-                            drawRect(accent.copy(alpha = 0.75f))
+                            drawRect(thumbSurface)
+                            glassEdge(size.minDimension / 2f, ios.isDark)
                         },
                     ),
             )
 
             Row(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(tabStridePx, maxOffsetPx, selected) {
+                        detectHorizontalDragGestures(
+                            onDragStart = {
+                                isDragging = true
+                                onPressChange(true)
+                            },
+                            onDragEnd = {
+                                isDragging = false
+                                onPressChange(false)
+                                snapToNearestTab()
+                            },
+                            onDragCancel = {
+                                isDragging = false
+                                onPressChange(false)
+                                snapToNearestTab()
+                            },
+                            onHorizontalDrag = { change, dragAmount ->
+                                change.consume()
+                                val nextValue = (indicatorPx.value + dragAmount).coerceIn(0f, maxOffsetPx)
+                                scope.launch {
+                                    indicatorPx.snapTo(nextValue)
+                                }
+                            },
+                        )
+                    },
                 horizontalArrangement = Arrangement.spacedBy(TabGap),
             ) {
                 Tab.entries.forEach { tab ->
@@ -170,7 +240,7 @@ private fun RowScope.TabItem(
 ) {
     val ios = Ios.colors
     val content by animateColorAsState(
-        targetValue = if (active) Color.White else ios.secondaryLabel,
+        targetValue = if (active) ios.blue else ios.secondaryLabel,
         label = "tabTint",
     )
     // ikon sedikit membesar dan memantul saat tab dipilih
@@ -191,7 +261,7 @@ private fun RowScope.TabItem(
             )
             .pointerInput(Unit) {
                 awaitEachGesture {
-                    awaitFirstDown()
+                    awaitFirstDown(requireUnconsumed = false)
                     onPressChange(true)
                     waitForUpOrCancellation()
                     onPressChange(false)
