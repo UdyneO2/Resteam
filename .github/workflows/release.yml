@@ -1,0 +1,121 @@
+name: Release
+
+# Membuat GitHub Release berisi:
+#   NetUI-vX.Y.Z-debug.apk    (selalu, ditandatangani app/debug.keystore)
+#   NetUI-vX.Y.Z-release.apk  (hanya jika secret keystore rilis terisi)
+# Nama berakhiran -debug.apk / -release.apk dipakai fitur pembaruan di dalam aplikasi.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Tag versi rilis (contoh: v1.2.0)'
+        required: true
+        default: 'v1.1.0'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-android
+
+      - name: Tentukan versi
+        id: ver
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          TAG="${INPUT_VERSION:-$REF_NAME}"
+          if ! echo "$TAG" | grep -Eq '^v[0-9]+(\.[0-9]+){0,2}([-.][0-9A-Za-z.]+)?$'; then
+            echo "::error::Tag '$TAG' tidak valid. Gunakan format seperti v1.2.0 atau v1.2.0-beta.1"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "name=${TAG#v}" >> "$GITHUB_OUTPUT"
+          if echo "$TAG" | grep -qiE -- '-(alpha|beta|rc)'; then
+            echo "pre=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pre=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Siapkan keystore rilis
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Secret keystore (KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD) belum lengkap. APK release dilewati; hanya APK debug yang dirilis."
+          fi
+
+      - name: Build APK debug
+        run: ./gradlew --no-daemon :app:assembleDebug -PversionName=${{ steps.ver.outputs.name }}
+
+      - name: Build APK release
+        if: steps.keystore.outputs.enabled == 'true'
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew --no-daemon :app:assembleRelease -PversionName=${{ steps.ver.outputs.name }}
+
+      - name: Verifikasi tanda tangan dan beri nama
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n1)apksigner"
+          mkdir -p dist
+
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/NetUI-$TAG-debug.apk"
+          if [ "${{ steps.keystore.outputs.enabled }}" = "true" ]; then
+            cp app/build/outputs/apk/release/app-release.apk "dist/NetUI-$TAG-release.apk"
+          fi
+
+          for f in dist/*.apk; do
+            echo "== $f"
+            "$APKSIGNER" verify --verbose --print-certs "$f" | grep -E "Verifies|Verified using|SHA-256 digest"
+          done
+          ls -la dist
+
+      - name: Catatan rilis
+        run: |
+          NAME="${{ steps.ver.outputs.name }}"
+          awk -v n="$NAME" '/^## /{f=(index($0,"[" n "]")>0)} f' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Rilis NetUI v$NAME" > notes.md
+          {
+            echo
+            echo "---"
+            echo "**Unduhan:** \`-release.apk\` untuk pemakaian sehari-hari, \`-debug.apk\` untuk pengujian."
+            echo "Keduanya bertanda tangan berbeda; berpindah jenis APK mengharuskan aplikasi lama dihapus lebih dulu."
+          } >> notes.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: NetUI ${{ steps.ver.outputs.tag }}
+          body_path: notes.md
+          prerelease: ${{ steps.ver.outputs.pre }}
+          files: dist/*.apk
+          fail_on_unmatched_files: true
+
+      - name: Hapus keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
