@@ -4,5 +4,4 @@ local.properties
 .idea/
 build/
 captures/
-*.jks
-*.keystore
+.DS_Store
