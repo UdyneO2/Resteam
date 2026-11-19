@@ -56,7 +56,7 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 enum class Tab(val label: String) {
-    WIFI("WiFi"),
+    WIFI("Hotspot"),
     CLIENT("Klien"),
     SETTINGS("Pengaturan"),
 }
@@ -66,7 +66,7 @@ private val TabGap = 4.dp
 /**
  * Bottom bar kaca berbentuk pil (tutorial Glass Bottom Bar dari Backdrop). Indikator tab aktif
  * adalah satu kaca bening tanpa tint yang meluncur dengan pegas antar tab saat di-tap maupun di-swipe,
- * dengan aksen ios.blue pada ikon dan teks tab aktif.
+ * membesar saat ditekan/digeser, dan memberi aksen ios.blue pada ikon & teks tab aktif.
  *
  * [backdrop] harus layer yang TIDAK memuat bar ini (lihat GlassHost).
  */
@@ -115,6 +115,13 @@ fun GlassBottomBar(
             val indicatorPx = remember { Animatable(tabStridePx * selected.ordinal) }
             var isDragging by remember { mutableStateOf(false) }
 
+            val hoveredIndex = if (tabStridePx > 0f) {
+                (indicatorPx.value / tabStridePx).roundToInt().coerceIn(0, count - 1)
+            } else {
+                selected.ordinal
+            }
+            val highlightedTab = if (isDragging) Tab.entries[hoveredIndex] else selected
+
             LaunchedEffect(selected, tabStridePx, isDragging) {
                 if (!isDragging) {
                     indicatorPx.animateTo(
@@ -158,34 +165,6 @@ fun GlassBottomBar(
                 }
             }
 
-            // kaca bening tanpa tint yang meluncur
-            Box(
-                Modifier
-                    .offset { IntOffset(indicatorPx.value.roundToInt(), 0) }
-                    .width(tabWidth)
-                    .fillMaxHeight()
-                    .drawBackdrop(
-                        backdrop = backdrop,
-                        shape = { CircleShape },
-                        effects = {
-                            vibrancy()
-                            blur(4.dp.toPx())
-                            if (supportsLens) lens(8.dp.toPx(), 16.dp.toPx())
-                        },
-                        // press-to-scale: layerBlock, bukan graphicsLayer, supaya backdrop tidak ikut membesar
-                        layerBlock = {
-                            val maxScale = (size.width + 16.dp.toPx()) / size.width
-                            val scale = lerp(1f, maxScale, press.value)
-                            scaleX = scale
-                            scaleY = scale
-                        },
-                        onDrawSurface = {
-                            drawRect(thumbSurface)
-                            glassEdge(size.minDimension / 2f, ios.isDark)
-                        },
-                    ),
-            )
-
             Row(
                 modifier = Modifier
                     .fillMaxSize()
@@ -220,12 +199,41 @@ fun GlassBottomBar(
                     TabItem(
                         tab = tab,
                         icon = icons.getValue(tab),
-                        active = tab == selected,
+                        active = tab == highlightedTab,
                         onClick = { onSelect(tab) },
                         onPressChange = onPressChange,
                     )
                 }
             }
+
+            // kaca bening tanpa tint yang meluncur dan membesar saat ditekan/digeser
+            Box(
+                Modifier
+                    .offset { IntOffset(indicatorPx.value.roundToInt(), 0) }
+                    .width(tabWidth)
+                    .fillMaxHeight()
+                    .drawBackdrop(
+                        backdrop = backdrop,
+                        shape = { CircleShape },
+                        effects = {
+                            vibrancy()
+                            blur(4.dp.toPx())
+                            if (supportsLens) lens(12.dp.toPx(), 24.dp.toPx())
+                        },
+                        // press-to-scale: layerBlock, bukan graphicsLayer, supaya backdrop tidak ikut membesar
+                        layerBlock = {
+                            val maxScale = ((size.height + 10.dp.toPx()) / size.height)
+                                .coerceAtLeast((size.width + 18.dp.toPx()) / size.width)
+                            val scale = lerp(1f, maxScale, press.value)
+                            scaleX = scale
+                            scaleY = scale
+                        },
+                        onDrawSurface = {
+                            drawRect(thumbSurface)
+                            glassEdge(size.minDimension / 2f, ios.isDark)
+                        },
+                    ),
+            )
         }
     }
 }
