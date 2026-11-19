@@ -1,6 +1,7 @@
 package com.udyneos.wifishare.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.clickable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -443,14 +444,14 @@ private fun WifiQuickCard(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    Column(
+        Column(
         modifier = modifier
             .clip(RoundedCornerShape(18.dp))
             .background(WifiCard)
             .border(1.dp, WifiBorder, RoundedCornerShape(18.dp))
-            .androidx.compose.foundation.clickable(onClick = onClick)
+            .clickable(onClick = onClick)
             .padding(14.dp),
-    ) {
+    ){
         Box(
             modifier = Modifier
                 .size(40.dp)

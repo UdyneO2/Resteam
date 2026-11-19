@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -158,7 +159,7 @@ fun GlassBottomBar(
                 }
             }
 
-            // 1. Indikator kaca bening tanpa tint di lapisan bawah Row agar ikon & label tidak tertutup/terdistorsi
+            // Indikator kaca bening tanpa tint
             Box(
                 Modifier
                     .offset { IntOffset(indicatorPx.value.roundToInt(), 0) }
@@ -186,11 +187,10 @@ fun GlassBottomBar(
                     ),
             )
 
-            // 2. Konten tab di atas indikator kaca dengan translationZ agar ikon & teks selalu terlihat jelas
+            // Row digambar setelah Box indikator sehingga berada di lapisan atas secara alami
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .graphicsLayer { translationZ = 1f }
                     .pointerInput(tabStridePx, maxOffsetPx, selected) {
                         detectHorizontalDragGestures(
                             onDragStart = {
