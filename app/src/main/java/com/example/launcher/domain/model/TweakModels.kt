@@ -42,3 +42,10 @@ data class CommandResult(
 
 class CommandFailedException(val result: CommandResult) :
     Exception("Perintah gagal (exit ${result.exitCode}): ${result.output.ifBlank { result.command }}")
+
+/** Profil per game: preset default dan apakah otomatis diterapkan saat game diluncurkan dari launcher. */
+data class GameProfile(
+    val gameId: String,
+    val presetId: Long?,
+    val autoApply: Boolean,
+)

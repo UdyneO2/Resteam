@@ -3,10 +3,9 @@ package com.example.launcher.domain.usecase
 import com.example.launcher.domain.model.CommandFailedException
 import com.example.launcher.domain.model.CommandResult
 import com.example.launcher.domain.model.TweakPreset
+import com.example.launcher.domain.repository.ActivityLog
 import com.example.launcher.domain.repository.ShellExecutor
 import javax.inject.Inject
-
-private val PACKAGE_REGEX = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$")
 
 /** Hanya perintah dari whitelist ini yang boleh dijalankan lewat Shizuku. */
 internal fun buildCommands(preset: TweakPreset, packageName: String): List<List<String>> = buildList {
@@ -18,12 +17,19 @@ internal fun buildCommands(preset: TweakPreset, packageName: String): List<List<
 
 class ApplyPresetUseCase @Inject constructor(
     private val shell: ShellExecutor,
+    private val log: ActivityLog,
 ) {
     suspend operator fun invoke(
         preset: TweakPreset,
         packageName: String,
     ): Result<List<CommandResult>> {
-        if (!PACKAGE_REGEX.matches(packageName)) {
+        val result = execute(preset, packageName)
+        record(preset, packageName, result)
+        return result
+    }
+
+    private suspend fun execute(preset: TweakPreset, packageName: String): Result<List<CommandResult>> {
+        if (!isValidPackageName(packageName)) {
             return Result.failure(IllegalArgumentException("Nama package tidak valid: $packageName"))
         }
         val results = mutableListOf<CommandResult>()
@@ -33,5 +39,23 @@ class ApplyPresetUseCase @Inject constructor(
             results += result
         }
         return Result.success(results)
+    }
+
+    private fun record(preset: TweakPreset, packageName: String, result: Result<List<CommandResult>>) {
+        result.fold(
+            onSuccess = { list ->
+                log.record(
+                    title = "Preset ${preset.name} diterapkan ($packageName)",
+                    detail = list.joinToString("\n\n") { "$ ${it.command}\n${it.output.ifBlank { "(ok)" }}" },
+                )
+            },
+            onFailure = {
+                log.record(
+                    title = "Preset ${preset.name} gagal ($packageName)",
+                    detail = it.message ?: "Kesalahan tidak diketahui",
+                    isError = true,
+                )
+            },
+        )
     }
 }

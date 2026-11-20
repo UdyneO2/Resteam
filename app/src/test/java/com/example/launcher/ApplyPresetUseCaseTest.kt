@@ -5,8 +5,11 @@ import com.example.launcher.domain.model.CommandResult
 import com.example.launcher.domain.model.CompileFilter
 import com.example.launcher.domain.model.GameMode
 import com.example.launcher.domain.model.TweakPreset
+import com.example.launcher.domain.repository.ActivityLog
 import com.example.launcher.domain.repository.ShellExecutor
 import com.example.launcher.domain.usecase.ApplyPresetUseCase
+import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -24,6 +27,8 @@ class ApplyPresetUseCaseTest {
         }
     }
 
+    private val log = mockk<ActivityLog>(relaxed = true)
+
     private val preset = TweakPreset(
         id = 1,
         gameId = "g",
@@ -36,7 +41,7 @@ class ApplyPresetUseCaseTest {
     fun `menjalankan game mode lalu compile sesuai urutan`() = runTest {
         val shell = FakeShell()
 
-        val result = ApplyPresetUseCase(shell)(preset, "com.test.game")
+        val result = ApplyPresetUseCase(shell, log)(preset, "com.test.game")
 
         assertTrue(result.isSuccess)
         assertEquals(
@@ -52,7 +57,7 @@ class ApplyPresetUseCaseTest {
     fun `package tidak valid ditolak tanpa menjalankan perintah`() = runTest {
         val shell = FakeShell()
 
-        val result = ApplyPresetUseCase(shell)(preset, "com.test; rm -rf /")
+        val result = ApplyPresetUseCase(shell, log)(preset, "com.test; rm -rf /")
 
         assertTrue(result.isFailure)
         assertTrue(shell.executed.isEmpty())
@@ -62,9 +67,23 @@ class ApplyPresetUseCaseTest {
     fun `berhenti di perintah pertama yang gagal`() = runTest {
         val shell = FakeShell(exitCodes = listOf(1))
 
-        val result = ApplyPresetUseCase(shell)(preset, "com.test.game")
+        val result = ApplyPresetUseCase(shell, log)(preset, "com.test.game")
 
         assertTrue(result.exceptionOrNull() is CommandFailedException)
         assertEquals(1, shell.executed.size)
+    }
+
+    @Test
+    fun `hasil sukses dicatat ke log aktivitas`() = runTest {
+        ApplyPresetUseCase(FakeShell(), log)(preset, "com.test.game")
+
+        verify { log.record(match { it.contains("diterapkan") }, any(), false) }
+    }
+
+    @Test
+    fun `kegagalan dicatat sebagai error`() = runTest {
+        ApplyPresetUseCase(FakeShell(exitCodes = listOf(1)), log)(preset, "com.test.game")
+
+        verify { log.record(match { it.contains("gagal") }, any(), true) }
     }
 }

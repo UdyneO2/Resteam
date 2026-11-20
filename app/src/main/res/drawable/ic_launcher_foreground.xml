@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:scaleX="0.048" android:scaleY="0.048" android:translateX="7.58" android:translateY="8.98">
+        <!-- Pentagon (outline cyan, isi gelap) -->
+        <path
+            android:fillColor="#1F2024"
+            android:strokeColor="#9CE5F4"
+            android:strokeWidth="33"
+            android:strokeLineJoin="round"
+            android:pathData="M859,433Q965,357 1071,432L1493,733Q1574,791 1539,885L1350,1400Q1312,1503 1202,1503L732,1503Q622,1503 584,1400L395,885Q360,791 441,733Z" />
+        <!-- Badan kontroler; d-pad, tombol, play, dan stick adalah lubang (even-odd) -->
+        <path
+            android:fillColor="#9CE5F4"
+            android:fillType="evenOdd"
+            android:pathData="M685,762H1249C1344,762 1404,830 1404,915L1424,1195C1424,1280 1372,1345 1304,1345C1258,1345 1232,1320 1219,1300L1168,1233A105,105 0 0 1 1021,1160H913A105,105 0 0 1 766,1233L715,1300C702,1320 676,1345 630,1345C562,1345 510,1280 510,1195L530,915C530,830 590,762 685,762ZM654,876Q654,850 680,850L695,850Q721,850 721,876L721,913Q721,917 725,917L761,917Q787,917 787,943L787,956Q787,982 761,982L725,982Q721,982 721,986L721,1022Q721,1048 695,1048L680,1048Q654,1048 654,1022L654,986Q654,982 650,982L614,982Q588,982 588,956L588,943Q588,917 614,917L650,917Q654,917 654,913ZM905,909Q905,885 927,896L1030,946Q1052,957 1031,969L926,1030Q905,1042 905,1018ZM1214,878a34,34 0 1,0 68,0a34,34 0 1,0 -68,0ZM1143,947a34,34 0 1,0 68,0a34,34 0 1,0 -68,0ZM1286,947a34,34 0 1,0 68,0a34,34 0 1,0 -68,0ZM1214,1020a34,34 0 1,0 68,0a34,34 0 1,0 -68,0ZM746,1135a62,62 0 1,0 124,0a62,62 0 1,0 -124,0ZM1061,1135a62,62 0 1,0 124,0a62,62 0 1,0 -124,0Z" />
+        <!-- Tombol bahu L/R -->
+        <path
+            android:fillColor="#9CE5F4"
+            android:pathData="M633,745Q638,707 672,707H766Q798,707 803,738Q718,736 633,745ZM1301,745Q1296,707 1262,707H1168Q1136,707 1131,738Q1216,736 1301,745Z" />
+    </group>
+</vector>

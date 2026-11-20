@@ -22,3 +22,15 @@ fun ShizukuState.indicatorColor(): Color = when (this) {
     ShizukuState.Unavailable -> LauncherColors.TextSecondary
     is ShizukuState.Error -> LauncherColors.Error
 }
+
+fun ShizukuState.description(): String = when (this) {
+    is ShizukuState.Ready -> when (mode) {
+        ShizukuMode.Adb -> "Shizuku berjalan dengan hak akses ADB (shell). Preset tweak bisa diterapkan."
+        ShizukuMode.Root -> "Shizuku berjalan dengan hak akses root. Preset tweak bisa diterapkan."
+    }
+    ShizukuState.PermissionRequired -> "Shizuku aktif, tetapi aplikasi ini belum diberi izin."
+    ShizukuState.PermissionDenied ->
+        "Izin ditolak. Buka aplikasi Shizuku lalu aktifkan aplikasi ini di daftar yang diizinkan."
+    ShizukuState.Unavailable -> "Layanan Shizuku tidak berjalan. Pasang dan jalankan Shizuku terlebih dahulu."
+    is ShizukuState.Error -> message
+}

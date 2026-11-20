@@ -100,3 +100,14 @@ fun CircleIconButton(
         }
     }
 }
+
+@Composable
+fun launcherTextFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedBorderColor = LauncherColors.Accent,
+    unfocusedBorderColor = LauncherColors.Border,
+    focusedTextColor = LauncherColors.TextPrimary,
+    unfocusedTextColor = LauncherColors.TextPrimary,
+    cursorColor = LauncherColors.Accent,
+    focusedLabelColor = LauncherColors.Accent,
+    unfocusedLabelColor = LauncherColors.TextSecondary,
+)

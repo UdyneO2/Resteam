@@ -22,3 +22,11 @@ fun PresetEntity.toDomain() = TweakPreset(
     gameMode = GameMode.fromArg(gameMode),
     compileFilter = CompileFilter.fromArg(compileFilter),
 )
+
+fun TweakPreset.toEntity() = PresetEntity(
+    id = id,
+    gameId = gameId,
+    name = name,
+    gameMode = gameMode.arg,
+    compileFilter = compileFilter?.arg,
+)

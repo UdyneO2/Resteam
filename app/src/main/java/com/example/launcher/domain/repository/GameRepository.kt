@@ -1,6 +1,7 @@
 package com.example.launcher.domain.repository
 
 import com.example.launcher.domain.model.Game
+import com.example.launcher.domain.model.ManagedApp
 
 interface GameRepository {
     /** Game terpasang, diurutkan dari yang terakhir dimainkan. */
@@ -10,4 +11,10 @@ interface GameRepository {
     suspend fun getMonthlyActivity(packageName: String): List<Float?>
 
     fun hasUsageAccess(): Boolean
+
+    /** Semua aplikasi launcher terpasang; game di urutan atas. */
+    suspend fun getInstalledApps(): List<ManagedApp>
+
+    /** Masukkan/keluarkan aplikasi dari daftar game. Override dihapus jika sama dengan hasil deteksi otomatis. */
+    suspend fun setGameIncluded(packageName: String, included: Boolean)
 }

@@ -3,13 +3,15 @@ package com.example.launcher.ui.home
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.launcher.data.GameLauncher
-import com.example.launcher.domain.model.CommandResult
 import com.example.launcher.domain.model.Game
 import com.example.launcher.domain.model.LauncherTab
 import com.example.launcher.domain.model.ShizukuState
 import com.example.launcher.domain.model.TweakPreset
+import com.example.launcher.domain.repository.ActivityLog
 import com.example.launcher.domain.repository.GameRepository
 import com.example.launcher.domain.repository.PresetRepository
+import com.example.launcher.domain.repository.ProfileRepository
+import com.example.launcher.domain.repository.SettingsRepository
 import com.example.launcher.domain.usecase.ApplyPresetUseCase
 import com.example.launcher.shizuku.ShizukuManager
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -34,7 +36,10 @@ import javax.inject.Inject
 class HomeViewModel @Inject constructor(
     private val repository: GameRepository,
     private val presetRepository: PresetRepository,
+    private val profileRepository: ProfileRepository,
     private val applyPreset: ApplyPresetUseCase,
+    private val activityLog: ActivityLog,
+    private val settingsRepository: SettingsRepository,
     private val shizukuManager: ShizukuManager,
     private val gameLauncher: GameLauncher,
 ) : ViewModel() {
@@ -48,13 +53,14 @@ class HomeViewModel @Inject constructor(
     private val _events = Channel<HomeEvent>(Channel.BUFFERED)
     val events = _events.receiveAsFlow()
 
-    val uiState: StateFlow<HomeUiState> = combine(content, selectedTab, shizukuState, tweaks) { c, t, s, w ->
-        HomeUiState(content = c, selectedTab = t, shizuku = s, tweaks = w)
+    val uiState: StateFlow<HomeUiState> = combine(content, selectedTab, shizukuState, tweaks, settingsRepository.settings) { c, t, s, w, st ->
+        HomeUiState(content = c, selectedTab = t, shizuku = s, tweaks = w, settings = st)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HomeUiState())
 
     init {
         observeShizuku()
         observePresets()
+        observeLog()
         load()
     }
 
@@ -86,7 +92,7 @@ class HomeViewModel @Inject constructor(
     private suspend fun loadDashboard(): GameDashboard? {
         val games = repository.getGames()
         val selected = games.firstOrNull { it.id == selectedGameId.value } ?: games.firstOrNull() ?: return null
-        presetRepository.seedDefaultsIfEmpty(selected.id)
+        presetRepository.seedDefaultsOnce(selected.id)
         return GameDashboard(
             games = games,
             selected = selected,
@@ -100,10 +106,25 @@ class HomeViewModel @Inject constructor(
     }
 
     fun onLaunchGame() {
-        val success = content.value as? ContentState.Success ?: return
-        gameLauncher.launch(success.dashboard.selected.packageName).onFailure { error ->
-            emit(error.message ?: "Gagal membuka game")
+        val game = (content.value as? ContentState.Success)?.dashboard?.selected ?: return
+        viewModelScope.launch {
+            applyProfilePreset(game)
+            gameLauncher.launch(game.packageName).onFailure { error ->
+                emit(error.message ?: "Gagal membuka game")
+            }
         }
+    }
+
+    /** Terapkan preset default profil (jika auto-apply aktif) sebelum game dibuka; kegagalan tidak menghalangi launch. */
+    private suspend fun applyProfilePreset(game: Game) {
+        val profile = profileRepository.getProfile(game.id)?.takeIf { it.autoApply } ?: return
+        val preset = tweaks.value.presets.firstOrNull { it.id == profile.presetId } ?: return
+        if (shizukuState.value !is ShizukuState.Ready) {
+            emit("Shizuku belum siap, game dibuka tanpa preset")
+            return
+        }
+        val result = applyPreset(preset, game.packageName)
+        result.onFailure { emit("Preset gagal diterapkan: ${it.message ?: "kesalahan tidak diketahui"}") }
     }
 
     fun onShizukuPillClick() {
@@ -118,8 +139,9 @@ class HomeViewModel @Inject constructor(
     fun onDismissPresets() = tweaks.update { it.copy(showPresetSheet = false) }
     fun onLogClick() = tweaks.update { it.copy(showLog = true) }
     fun onDismissLog() = tweaks.update { it.copy(showLog = false) }
-    fun onClearLog() = tweaks.update { it.copy(log = emptyList()) }
-    fun onInfoClick() = emit("System properties segera hadir")
+    fun onClearLog() = activityLog.clear()
+    fun onInfoClick() = tweaks.update { it.copy(showInfo = true) }
+    fun onDismissInfo() = tweaks.update { it.copy(showInfo = false) }
 
     fun onApplyPreset(preset: TweakPreset) {
         val game = (content.value as? ContentState.Success)?.dashboard?.selected ?: return
@@ -135,7 +157,6 @@ class HomeViewModel @Inject constructor(
                 it.copy(
                     isApplying = false,
                     showPresetSheet = false,
-                    log = (it.log + logLines(preset, result)).takeLast(MAX_LOG_LINES),
                 )
             }
             emit(
@@ -146,14 +167,6 @@ class HomeViewModel @Inject constructor(
             )
         }
     }
-
-    private fun logLines(preset: TweakPreset, result: Result<List<CommandResult>>): List<String> =
-        result.fold(
-            onSuccess = { list ->
-                list.map { "$ ${it.command}\n${it.output.ifBlank { "(ok)" }}" }
-            },
-            onFailure = { listOf("✗ ${preset.name}: ${it.message}") },
-        )
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun observePresets() {
@@ -167,6 +180,12 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    private fun observeLog() {
+        viewModelScope.launch {
+            activityLog.entries.collect { entries -> tweaks.update { it.copy(log = entries) } }
+        }
+    }
+
     private fun observeShizuku() {
         viewModelScope.launch {
             shizukuManager.state.collect { shizukuState.value = it }
@@ -175,9 +194,5 @@ class HomeViewModel @Inject constructor(
 
     private fun emit(text: String) {
         _events.trySend(HomeEvent.ShowMessage(text))
-    }
-
-    private companion object {
-        const val MAX_LOG_LINES = 100
     }
 }

@@ -1,14 +1,20 @@
 package com.example.launcher
 
 import com.example.launcher.data.GameLauncher
+import com.example.launcher.domain.model.AppSettings
 import com.example.launcher.domain.model.CommandResult
 import com.example.launcher.domain.model.Game
 import com.example.launcher.domain.model.GameMode
+import com.example.launcher.domain.model.GameProfile
+import com.example.launcher.domain.model.LogEntry
 import com.example.launcher.domain.model.ShizukuMode
 import com.example.launcher.domain.model.ShizukuState
 import com.example.launcher.domain.model.TweakPreset
 import com.example.launcher.domain.repository.GameRepository
+import com.example.launcher.domain.repository.ActivityLog
 import com.example.launcher.domain.repository.PresetRepository
+import com.example.launcher.domain.repository.ProfileRepository
+import com.example.launcher.domain.repository.SettingsRepository
 import com.example.launcher.domain.usecase.ApplyPresetUseCase
 import com.example.launcher.shizuku.ShizukuManager
 import com.example.launcher.ui.home.ContentState
@@ -16,11 +22,13 @@ import com.example.launcher.ui.home.HomeEvent
 import com.example.launcher.ui.home.HomeViewModel
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -39,7 +47,10 @@ class HomeViewModelTest {
 
     private val repository = mockk<GameRepository>()
     private val presetRepository = mockk<PresetRepository>(relaxed = true)
+    private val profileRepository = mockk<ProfileRepository>()
     private val applyPreset = mockk<ApplyPresetUseCase>()
+    private val activityLog = mockk<ActivityLog>(relaxed = true)
+    private val settingsRepository = mockk<SettingsRepository>()
     private val shizukuManager = mockk<ShizukuManager>(relaxed = true)
     private val gameLauncher = mockk<GameLauncher>()
 
@@ -52,6 +63,9 @@ class HomeViewModelTest {
         Dispatchers.setMain(UnconfinedTestDispatcher())
         every { shizukuManager.state } returns flowOf(ShizukuState.Ready(ShizukuMode.Adb))
         every { presetRepository.observePresets(any()) } returns flowOf(listOf(preset))
+        every { settingsRepository.settings } returns flowOf(AppSettings())
+        coEvery { profileRepository.getProfile(any()) } returns null
+        every { activityLog.entries } returns MutableStateFlow(emptyList())
     }
 
     @AfterEach
@@ -66,7 +80,7 @@ class HomeViewModelTest {
     }
 
     private fun createViewModel() =
-        HomeViewModel(repository, presetRepository, applyPreset, shizukuManager, gameLauncher)
+        HomeViewModel(repository, presetRepository, profileRepository, applyPreset, activityLog, settingsRepository, shizukuManager, gameLauncher)
 
     @Test
     fun `load sukses menghasilkan ContentState Success dan memuat preset`() = runTest {
@@ -77,6 +91,7 @@ class HomeViewModelTest {
         assertTrue(viewModel.uiState.value.content is ContentState.Success)
         assertEquals(ShizukuState.Ready(ShizukuMode.Adb), viewModel.uiState.value.shizuku)
         assertEquals(listOf(preset), viewModel.uiState.value.tweaks.presets)
+        assertEquals(AppSettings(), viewModel.uiState.value.settings)
     }
 
     @Test
@@ -114,7 +129,7 @@ class HomeViewModelTest {
     }
 
     @Test
-    fun `apply preset sukses menutup sheet dan mengisi log`() = runTest {
+    fun `apply preset sukses menutup sheet`() = runTest {
         stubRepositorySuccess()
         coEvery { applyPreset(preset, game.packageName) } returns
             Result.success(listOf(CommandResult("cmd game set", 0, "")))
@@ -127,7 +142,6 @@ class HomeViewModelTest {
         val tweaks = viewModel.uiState.value.tweaks
         assertTrue(!tweaks.showPresetSheet)
         assertTrue(!tweaks.isApplying)
-        assertEquals(1, tweaks.log.size)
     }
 
     @Test
@@ -165,5 +179,100 @@ class HomeViewModelTest {
 
         assertEquals(otherGame.id, selectedId())
         coVerify { repository.getMonthlyActivity(otherGame.packageName) }
+    }
+
+    @Test
+    fun `auto apply menerapkan preset sebelum membuka game`() = runTest {
+        stubRepositorySuccess()
+        coEvery { profileRepository.getProfile(game.id) } returns GameProfile(game.id, preset.id, autoApply = true)
+        coEvery { applyPreset(preset, game.packageName) } returns Result.success(emptyList())
+        every { gameLauncher.launch(game.packageName) } returns Result.success(Unit)
+        val viewModel = createViewModel()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.uiState.collect {} }
+
+        viewModel.onLaunchGame()
+
+        coVerifyOrder {
+            applyPreset(preset, game.packageName)
+            gameLauncher.launch(game.packageName)
+        }
+    }
+
+    @Test
+    fun `auto apply dilewati saat Shizuku belum siap tetapi game tetap dibuka`() = runTest {
+        stubRepositorySuccess()
+        every { shizukuManager.state } returns flowOf(ShizukuState.Unavailable)
+        coEvery { profileRepository.getProfile(game.id) } returns GameProfile(game.id, preset.id, autoApply = true)
+        every { gameLauncher.launch(game.packageName) } returns Result.success(Unit)
+        val viewModel = createViewModel()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.uiState.collect {} }
+
+        viewModel.onLaunchGame()
+
+        coVerify(exactly = 0) { applyPreset(any(), any()) }
+        verify(exactly = 1) { gameLauncher.launch(game.packageName) }
+        assertEquals(HomeEvent.ShowMessage("Shizuku belum siap, game dibuka tanpa preset"), viewModel.events.first())
+    }
+
+    @Test
+    fun `kegagalan preset tidak menghalangi game dibuka`() = runTest {
+        stubRepositorySuccess()
+        coEvery { profileRepository.getProfile(game.id) } returns GameProfile(game.id, preset.id, autoApply = true)
+        coEvery { applyPreset(preset, game.packageName) } returns Result.failure(IllegalStateException("gagal"))
+        every { gameLauncher.launch(game.packageName) } returns Result.success(Unit)
+        val viewModel = createViewModel()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.uiState.collect {} }
+
+        viewModel.onLaunchGame()
+
+        verify(exactly = 1) { gameLauncher.launch(game.packageName) }
+    }
+
+    @Test
+    fun `profil tanpa auto apply langsung membuka game`() = runTest {
+        stubRepositorySuccess()
+        coEvery { profileRepository.getProfile(game.id) } returns GameProfile(game.id, preset.id, autoApply = false)
+        every { gameLauncher.launch(game.packageName) } returns Result.success(Unit)
+        val viewModel = createViewModel()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.uiState.collect {} }
+
+        viewModel.onLaunchGame()
+
+        coVerify(exactly = 0) { applyPreset(any(), any()) }
+        verify(exactly = 1) { gameLauncher.launch(game.packageName) }
+    }
+
+    @Test
+    fun `log aktivitas bersama diteruskan ke state`() = runTest {
+        stubRepositorySuccess()
+        val entry = LogEntry(1L, "judul", "detail", isError = false)
+        every { activityLog.entries } returns MutableStateFlow(listOf(entry))
+        val viewModel = createViewModel()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.uiState.collect {} }
+
+        assertEquals(listOf(entry), viewModel.uiState.value.tweaks.log)
+    }
+
+    @Test
+    fun `bersihkan log memanggil ActivityLog`() = runTest {
+        stubRepositorySuccess()
+        val viewModel = createViewModel()
+
+        viewModel.onClearLog()
+
+        verify(exactly = 1) { activityLog.clear() }
+    }
+
+    @Test
+    fun `tombol info membuka dan menutup dialog`() = runTest {
+        stubRepositorySuccess()
+        val viewModel = createViewModel()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.uiState.collect {} }
+
+        viewModel.onInfoClick()
+        assertTrue(viewModel.uiState.value.tweaks.showInfo)
+
+        viewModel.onDismissInfo()
+        assertTrue(!viewModel.uiState.value.tweaks.showInfo)
     }
 }

@@ -10,7 +10,10 @@ import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.os.Build
 import android.os.Process
+import com.example.launcher.data.local.GameOverrideDao
+import com.example.launcher.data.local.GameOverrideEntity
 import com.example.launcher.domain.model.Game
+import com.example.launcher.domain.model.ManagedApp
 import com.example.launcher.domain.repository.GameRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +27,7 @@ import javax.inject.Singleton
 @Singleton
 class InstalledGameRepository @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val overrideDao: GameOverrideDao,
 ) : GameRepository {
 
     private val packageManager: PackageManager get() = context.packageManager
@@ -31,12 +35,13 @@ class InstalledGameRepository @Inject constructor(
     override suspend fun getGames(): List<Game> = withContext(Dispatchers.IO) {
         val hasUsage = hasUsageAccess()
         val usage = if (hasUsage) loadUsageTotals() else emptyMap()
+        val overrides = overrideDao.getAll().associate { it.packageName to it.included }
 
         queryLauncherApps()
             .map { it.activityInfo.applicationInfo }
             .distinctBy { it.packageName }
-            // Hanya aplikasi yang dikategorikan sebagai game (app sendiri dikecualikan)
-            .filter { it.packageName != context.packageName && it.category == ApplicationInfo.CATEGORY_GAME }
+            // Override manual user menang atas deteksi kategori (app sendiri dikecualikan)
+            .filter { it.packageName != context.packageName && (overrides[it.packageName] ?: it.isGameCategory()) }
             .map { info ->
                 val stats = usage[info.packageName]
                 Game(
@@ -76,6 +81,40 @@ class InstalledGameRepository @Inject constructor(
         }
         leadingBlanks + days
     }
+
+    override suspend fun getInstalledApps(): List<ManagedApp> = withContext(Dispatchers.IO) {
+        val overrides = overrideDao.getAll().associate { it.packageName to it.included }
+        queryLauncherApps()
+            .map { it.activityInfo.applicationInfo }
+            .distinctBy { it.packageName }
+            .filter { it.packageName != context.packageName }
+            .map { info ->
+                val detected = info.isGameCategory()
+                ManagedApp(
+                    packageName = info.packageName,
+                    title = info.loadLabel(packageManager).toString(),
+                    isGame = overrides[info.packageName] ?: detected,
+                    detectedAsGame = detected,
+                )
+            }
+            .sortedWith(compareByDescending<ManagedApp> { it.isGame }.thenBy { it.title.lowercase() })
+    }
+
+    override suspend fun setGameIncluded(packageName: String, included: Boolean) {
+        withContext(Dispatchers.IO) {
+            val detected = runCatching {
+                @Suppress("DEPRECATION")
+                packageManager.getApplicationInfo(packageName, 0).isGameCategory()
+            }.getOrDefault(false)
+            if (included == detected) {
+                overrideDao.delete(packageName)
+            } else {
+                overrideDao.upsert(GameOverrideEntity(packageName, included))
+            }
+        }
+    }
+
+    private fun ApplicationInfo.isGameCategory(): Boolean = category == ApplicationInfo.CATEGORY_GAME
 
     override fun hasUsageAccess(): Boolean {
         val appOps = context.getSystemService(AppOpsManager::class.java)

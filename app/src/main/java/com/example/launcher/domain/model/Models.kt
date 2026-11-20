@@ -41,3 +41,12 @@ sealed interface ShizukuState {
     data class Ready(val mode: ShizukuMode) : ShizukuState
     data class Error(val message: String) : ShizukuState
 }
+
+/** Aplikasi terpasang yang bisa dimasukkan/dikeluarkan dari daftar game. */
+data class ManagedApp(
+    val packageName: String,
+    val title: String,
+    /** Status efektif: override user, atau hasil deteksi otomatis jika belum di-override. */
+    val isGame: Boolean,
+    val detectedAsGame: Boolean,
+)

@@ -1,6 +1,8 @@
 package com.example.launcher.ui.home
 
+import com.example.launcher.domain.model.AppSettings
 import com.example.launcher.domain.model.Game
+import com.example.launcher.domain.model.LogEntry
 import com.example.launcher.domain.model.LauncherTab
 import com.example.launcher.domain.model.ShizukuState
 import com.example.launcher.domain.model.TweakPreset
@@ -24,8 +26,9 @@ data class TweakUiState(
     val presets: List<TweakPreset> = emptyList(),
     val showPresetSheet: Boolean = false,
     val isApplying: Boolean = false,
-    val log: List<String> = emptyList(),
+    val log: List<LogEntry> = emptyList(),
     val showLog: Boolean = false,
+    val showInfo: Boolean = false,
 )
 
 data class HomeUiState(
@@ -33,6 +36,7 @@ data class HomeUiState(
     val selectedTab: LauncherTab = LauncherTab.AllGames,
     val shizuku: ShizukuState = ShizukuState.Unavailable,
     val tweaks: TweakUiState = TweakUiState(),
+    val settings: AppSettings = AppSettings(),
 )
 
 sealed interface HomeEvent {

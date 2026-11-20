@@ -14,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -25,7 +26,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.launcher.domain.model.LauncherTab
 import com.example.launcher.domain.model.ShizukuState
 import com.example.launcher.ui.components.LauncherCard
+import com.example.launcher.ui.info.SystemInfoDialog
+import com.example.launcher.ui.logs.LogsTab
+import com.example.launcher.ui.profiles.ProfilesTab
+import com.example.launcher.ui.tweaks.TweaksTab
 import com.example.launcher.ui.theme.LauncherColors
+import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.format.TextStyle
 import java.util.Locale
@@ -38,6 +44,8 @@ fun HomeScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val showMessage: (String) -> Unit = { text -> scope.launch { snackbarHostState.showSnackbar(text) } }
     val context = LocalContext.current
     val openUsageSettings: () -> Unit = {
         runCatching {
@@ -65,14 +73,20 @@ fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             HomeTopBar(
-                userName = "Player",
+                userName = state.settings.userName,
                 selectedTab = state.selectedTab,
                 onTabSelected = viewModel::onTabSelected,
                 shizukuState = state.shizuku,
                 isCompact = isCompact,
             )
 
-            if (state.selectedTab != LauncherTab.AllGames) {
+            if (state.selectedTab == LauncherTab.ShizukuTweaks) {
+                TweaksTab(onMessage = showMessage)
+            } else if (state.selectedTab == LauncherTab.Profiles) {
+                ProfilesTab()
+            } else if (state.selectedTab == LauncherTab.Logs) {
+                LogsTab()
+            } else if (state.selectedTab != LauncherTab.AllGames) {
                 LauncherCard(Modifier.fillMaxWidth()) {
                     Text("${state.selectedTab.label} — segera hadir", color = LauncherColors.TextSecondary)
                 }
@@ -105,12 +119,22 @@ fun HomeScreen(
             presets = state.tweaks.presets,
             isApplying = state.tweaks.isApplying,
             canApply = state.shizuku is ShizukuState.Ready,
+            confirmApply = state.settings.confirmBeforeApply,
             onApply = viewModel::onApplyPreset,
             onDismiss = viewModel::onDismissPresets,
         )
     }
     if (state.tweaks.showLog) {
         LogDialog(state.tweaks.log, onClear = viewModel::onClearLog, onDismiss = viewModel::onDismissLog)
+    }
+    if (state.tweaks.showInfo) {
+        (state.content as? ContentState.Success)?.dashboard?.selected?.let { game ->
+            SystemInfoDialog(
+                packageName = game.packageName,
+                gameTitle = game.title,
+                onDismiss = viewModel::onDismissInfo,
+            )
+        }
     }
 }
 

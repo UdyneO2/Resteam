@@ -6,11 +6,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.example.launcher.domain.model.LogEntry
 import com.example.launcher.domain.model.TweakPreset
+import com.example.launcher.ui.logs.toDisplayText
 import com.example.launcher.ui.theme.LauncherColors
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -19,9 +25,23 @@ fun PresetSheet(
     presets: List<TweakPreset>,
     isApplying: Boolean,
     canApply: Boolean,
+    confirmApply: Boolean,
     onApply: (TweakPreset) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var pending by remember { mutableStateOf<TweakPreset?>(null) }
+
+    pending?.let { preset ->
+        AlertDialog(
+            onDismissRequest = { pending = null },
+            containerColor = LauncherColors.Surface,
+            title = { Text("Terapkan preset?", color = LauncherColors.TextPrimary) },
+            text = { Text("${preset.name} • ${preset.describe()}", color = LauncherColors.TextSecondary) },
+            confirmButton = { TextButton(onClick = { pending = null; onApply(preset) }) { Text("Terapkan") } },
+            dismissButton = { TextButton(onClick = { pending = null }) { Text("Batal") } },
+        )
+    }
+
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = LauncherColors.Surface) {
         Column(
             modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp).navigationBarsPadding(),
@@ -39,7 +59,11 @@ fun PresetSheet(
                 Text("Belum ada preset.", color = LauncherColors.TextSecondary)
             }
             presets.forEach { preset ->
-                PresetRow(preset, enabled = canApply && !isApplying, onApply = { onApply(preset) })
+                PresetRow(
+                    preset,
+                    enabled = canApply && !isApplying,
+                    onApply = { if (confirmApply) pending = preset else onApply(preset) },
+                )
             }
         }
     }
@@ -74,7 +98,7 @@ private fun PresetRow(preset: TweakPreset, enabled: Boolean, onApply: () -> Unit
 }
 
 @Composable
-fun LogDialog(log: List<String>, onClear: () -> Unit, onDismiss: () -> Unit) {
+fun LogDialog(log: List<LogEntry>, onClear: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = LauncherColors.Surface,
@@ -85,7 +109,7 @@ fun LogDialog(log: List<String>, onClear: () -> Unit, onDismiss: () -> Unit) {
                     Text("Belum ada aktivitas.", color = LauncherColors.TextSecondary)
                 } else {
                     Text(
-                        text = log.joinToString("\n\n"),
+                        text = log.asReversed().joinToString("\n\n") { it.toDisplayText() },
                         fontFamily = FontFamily.Monospace,
                         style = MaterialTheme.typography.bodySmall,
                         color = LauncherColors.TextPrimary,

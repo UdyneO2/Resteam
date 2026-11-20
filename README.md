@@ -36,6 +36,30 @@ Tombol terminal membuka log hasil eksekusi.
 - Daftar disegarkan otomatis saat layar kembali aktif.
 - Kartu Achievements dihapus karena sistem Android tidak menyediakan data achievement.
 
+## Manage games & ikon (Fase 8)
+- Layar **Manage**: cari semua aplikasi terpasang dan aktifkan/nonaktifkan sebagai game. Pilihan manual disimpan di Room (tabel `game_overrides`, migrasi 1→2 menjaga preset lama) dan menang atas deteksi otomatis.
+- Ikon aplikasi: adaptive icon dari logo pentagon + kontroler (`res/drawable/ic_launcher_foreground.xml`, background `#0E0F11`, plus `ic_launcher_monochrome.xml` untuk themed icon Android 13+). Logo yang sama dipakai di sidebar (`ic_logo.xml`).
+- Semua ikon berupa VectorDrawable XML (tanpa PNG), jadi tajam di semua kepadatan layar.
+
+## Tab Shizuku
+Status layanan (Ready/izin/tidak aktif), tombol aksi sesuai kondisi (buka Shizuku, minta izin, diagnostik), panduan aktivasi.
+Diagnostik menjalankan perintah read-only (`id`, `getprop ro.build.version.release`) untuk memverifikasi koneksi.
+
+## Settings
+Disimpan di DataStore Preferences: nama tampilan (dipakai di sapaan Home), konfirmasi sebelum menerapkan preset, pintasan akses penggunaan, versi aplikasi.
+
+## Tab Shizuku Tweaks
+Kelola preset per game: buat, edit, hapus (Room), pilih game mode (standard/performance/battery) dan compile filter, lalu Apply langsung dari tab.
+
+## Tab Profiles
+Profil per game: pilih preset default dan aktifkan auto-apply. Saat Launch Game ditekan, preset diterapkan lewat Shizuku lebih dulu (jika Shizuku siap), lalu game dibuka. Kegagalan preset tidak menghalangi game dibuka.
+Database sekarang versi 4 (migrasi 1→2→3→4 menjaga data lama).
+
+## Tab Logs & System properties
+- `ActivityLog` bersama (in-memory, maks 200 entri) dicatat otomatis oleh `ApplyPresetUseCase`, jadi apply dari Home, tab Tweaks, maupun auto-apply saat Launch muncul di tab **Logs** dan dialog terminal.
+- Tombol info di hero membuka **System properties**: info perangkat, versi game, dan game mode saat ini (read-only `cmd game list-modes`, hanya jika Shizuku siap).
+- Log hilang saat proses aplikasi dimatikan (belum dipersistenkan).
+
 ## Test
 `./gradlew testDebugUnitTest` (JUnit 5 + Mockk)
 

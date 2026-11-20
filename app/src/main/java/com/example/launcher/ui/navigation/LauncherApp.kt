@@ -3,6 +3,7 @@ package com.example.launcher.ui.navigation
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
+import androidx.compose.foundation.Image
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.WindowSizeClass
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
@@ -11,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -19,7 +21,11 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.launcher.R
 import com.example.launcher.ui.home.HomeScreen
+import com.example.launcher.ui.manage.ManageGamesScreen
+import com.example.launcher.ui.settings.SettingsScreen
+import com.example.launcher.ui.shizuku.ShizukuScreen
 import com.example.launcher.ui.theme.LauncherColors
 import com.example.launcher.ui.theme.LauncherShapes
 
@@ -80,8 +86,9 @@ private fun LauncherNavHost(
         modifier = modifier,
     ) {
         composable(AppDestination.Library.route) { HomeScreen(isCompact = isCompact) }
-        composable(AppDestination.Shizuku.route) { PlaceholderScreen("Shizuku Tweaks") }
-        composable(AppDestination.Settings.route) { PlaceholderScreen("Settings") }
+        composable(AppDestination.Manage.route) { ManageGamesScreen() }
+        composable(AppDestination.Shizuku.route) { ShizukuScreen() }
+        composable(AppDestination.Settings.route) { SettingsScreen() }
     }
 }
 
@@ -95,12 +102,22 @@ private fun LauncherSidebar(
         modifier = modifier.padding(horizontal = 16.dp, vertical = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(
-            text = "LAUNCHER",
-            style = MaterialTheme.typography.titleLarge,
-            color = LauncherColors.Accent,
+        Row(
             modifier = Modifier.padding(start = 8.dp, bottom = 24.dp),
-        )
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Image(
+                painter = painterResource(R.drawable.ic_logo),
+                contentDescription = null,
+                modifier = Modifier.size(36.dp),
+            )
+            Text(
+                text = "LAUNCHER",
+                style = MaterialTheme.typography.titleLarge,
+                color = LauncherColors.Accent,
+            )
+        }
         AppDestination.entries
             .filter { it != AppDestination.Settings }
             .forEach { SidebarItem(it, it == current, onNavigate) }
