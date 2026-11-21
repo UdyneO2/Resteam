@@ -48,6 +48,8 @@ case "$1" in
 esac
 ```
 
+Template siap pakai ada di [`scripts/base.sh`](scripts/base.sh): sudah berisi notifikasi (`cmd notification post`) dan penyimpanan nilai asli ke file, karena `apply` dan `restore` berjalan sebagai proses terpisah. Salin file itu, ganti nama dan isi bagian tweak.
+
 Tanpa `# name:`, nama file dipakai. Script dibatasi 100 KB dan 60 detik per eksekusi; proses yang lewat batas dimatikan paksa.
 
 Path di contoh hanya ilustrasi. Nilai dan path sysfs beda di tiap perangkat, jadi cek dulu di HP kamu.
@@ -94,14 +96,6 @@ Script berjalan dengan hak akses shell (uid 2000, atau root kalau Shizuku jalan 
 - Log hanya di memori, hilang saat proses mati.
 - Foto banner dengan rotasi EXIF bisa tampil miring.
 - Teks UI masih ditulis langsung di kode, belum dipindah ke `strings.xml`.
-
-## Tes
-
-```
-./gradlew testDebugUnitTest
-```
-
-Unit test memakai JUnit 5 dan Mockk. Bagian script dan service sejauh ini hanya diuji manual di perangkat.
 
 ## Lisensi
 
