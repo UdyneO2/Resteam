@@ -46,7 +46,7 @@ class ApplyPresetUseCaseTest {
         assertTrue(result.isSuccess)
         assertEquals(
             listOf(
-                listOf("cmd", "game", "set", "--mode", "performance", "com.test.game"),
+                listOf("cmd", "game", "set", "--mode", "2", "com.test.game"),
                 listOf("cmd", "package", "compile", "-m", "speed-profile", "-f", "com.test.game"),
             ),
             shell.executed,

@@ -9,7 +9,7 @@ import javax.inject.Inject
 
 /** Hanya perintah dari whitelist ini yang boleh dijalankan lewat Shizuku. */
 internal fun buildCommands(preset: TweakPreset, packageName: String): List<List<String>> = buildList {
-    add(listOf("cmd", "game", "set", "--mode", preset.gameMode.arg, packageName))
+    add(listOf("cmd", "game", "set", "--mode", preset.gameMode.code.toString(), packageName))
     preset.compileFilter?.let {
         add(listOf("cmd", "package", "compile", "-m", it.arg, "-f", packageName))
     }

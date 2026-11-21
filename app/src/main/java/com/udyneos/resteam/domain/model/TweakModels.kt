@@ -1,9 +1,14 @@
 package com.udyneos.resteam.domain.model
 
-enum class GameMode(val arg: String, val label: String) {
-    Standard("standard", "Standard"),
-    Performance("performance", "Performance"),
-    Battery("battery", "Battery");
+/**
+ * [arg] disimpan di database. [code] dikirim ke `cmd game set --mode`: angka konstanta GameManager
+ * (STANDARD=1, PERFORMANCE=2, BATTERY=3), karena sebagian versi Android menolak nama
+ * (NumberFormatException: For input string: "performance").
+ */
+enum class GameMode(val arg: String, val label: String, val code: Int) {
+    Standard("standard", "Standard", 1),
+    Performance("performance", "Performance", 2),
+    Battery("battery", "Battery", 3);
 
     companion object {
         fun fromArg(arg: String): GameMode = entries.firstOrNull { it.arg == arg } ?: Standard
