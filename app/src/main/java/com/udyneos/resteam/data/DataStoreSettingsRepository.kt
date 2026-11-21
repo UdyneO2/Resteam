@@ -36,8 +36,6 @@ class DataStoreSettingsRepository @Inject constructor(
                 shizukuTweaksEnabled = prefs[SHIZUKU_TWEAKS_ENABLED] ?: false,
                 scriptRepo = prefs[SCRIPT_REPO] ?: AppSettings.DEFAULT_SCRIPT_REPO,
                 scriptBranch = prefs[SCRIPT_BRANCH] ?: AppSettings.DEFAULT_SCRIPT_BRANCH,
-                scriptRepo = prefs[SCRIPT_REPO] ?: AppSettings.DEFAULT_SCRIPT_REPO,
-                scriptBranch = prefs[SCRIPT_BRANCH] ?: AppSettings.DEFAULT_SCRIPT_BRANCH,
                 scriptsLastUpdatedAt = prefs[SCRIPTS_LAST_UPDATED] ?: 0L,
             )
         }
@@ -75,8 +73,6 @@ class DataStoreSettingsRepository @Inject constructor(
         val USER_NAME = stringPreferencesKey("user_name")
         val CONFIRM_BEFORE_APPLY = booleanPreferencesKey("confirm_before_apply")
         val SHIZUKU_TWEAKS_ENABLED = booleanPreferencesKey("shizuku_tweaks_enabled")
-        val SCRIPT_REPO = stringPreferencesKey("script_repo")
-        val SCRIPT_BRANCH = stringPreferencesKey("script_branch")
         val SCRIPT_REPO = stringPreferencesKey("script_repo")
         val SCRIPT_BRANCH = stringPreferencesKey("script_branch")
         val SCRIPTS_LAST_UPDATED = longPreferencesKey("scripts_last_updated")
