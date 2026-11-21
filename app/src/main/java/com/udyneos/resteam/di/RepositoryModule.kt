@@ -3,7 +3,6 @@ package com.udyneos.resteam.di
 import com.udyneos.resteam.data.AndroidGameInfoRepository
 import com.udyneos.resteam.data.DataStoreSettingsRepository
 import com.udyneos.resteam.data.GitHubScriptSource
-import com.udyneos.resteam.data.GitHubScriptSource
 import com.udyneos.resteam.data.InMemoryActivityLog
 import com.udyneos.resteam.data.InstalledGameRepository
 import com.udyneos.resteam.data.RoomPresetRepository
@@ -14,7 +13,6 @@ import com.udyneos.resteam.domain.repository.GameInfoRepository
 import com.udyneos.resteam.domain.repository.GameRepository
 import com.udyneos.resteam.domain.repository.PresetRepository
 import com.udyneos.resteam.domain.repository.ProfileRepository
-import com.udyneos.resteam.domain.repository.RemoteScriptSource
 import com.udyneos.resteam.domain.repository.RemoteScriptSource
 import com.udyneos.resteam.domain.repository.ScriptRepository
 import com.udyneos.resteam.domain.repository.SettingsRepository
@@ -56,10 +54,6 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindScriptRepository(impl: RoomScriptRepository): ScriptRepository
-
-    @Binds
-    @Singleton
-    abstract fun bindRemoteScriptSource(impl: GitHubScriptSource): RemoteScriptSource
 
     @Binds
     @Singleton

@@ -10,7 +10,6 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.udyneos.resteam.domain.model.AppSettings
 import com.udyneos.resteam.domain.repository.SettingsRepository
 import com.udyneos.resteam.domain.usecase.isValidBranch
-import com.udyneos.resteam.domain.usecase.isValidBranch
 import com.udyneos.resteam.domain.usecase.isValidRepo
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
