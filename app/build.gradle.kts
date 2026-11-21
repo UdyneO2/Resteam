@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.launcher"
+    namespace = "com.udyneos.resteam"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.launcher"
+        applicationId = "com.udyneos.resteam"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
@@ -19,10 +19,6 @@ android {
     }
 
     buildTypes {
-        debug {
-            isMinifyEnabled = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-        }
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

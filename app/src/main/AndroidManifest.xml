@@ -7,6 +7,11 @@
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
 
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Dibutuhkan agar getLaunchIntentForPackage() bisa melihat game terpasang (Android 11+) -->
     <queries>
         <package android:name="moe.shizuku.privileged.api" />
@@ -33,6 +38,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Menjalankan apply/restore script Shizuku di sekitar sesi game -->
+        <service
+            android:name=".session.GameSessionService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Menjalankan dan mengembalikan tweak sistem sekitar sesi game" />
+        </service>
 
         <!-- Provider wajib agar aplikasi menerima binder dari Shizuku -->
         <provider

@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "GameLauncher"
+rootProject.name = "ReSteam"
 include(":app")
